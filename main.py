@@ -1,13 +1,18 @@
 import os
 import asyncio
 import boto3
+import logging
 from botocore.exceptions import NoCredentialsError
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from pyrogram.errors import FloodWait
+from dotenv import load_dotenv
+
+# --- Basic Logging Setup ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # --- Configuration ---
-from dotenv import load_dotenv
 load_dotenv()
 
 API_ID = os.environ.get("API_ID")
@@ -19,123 +24,141 @@ WASABI_BUCKET = os.environ.get("WASABI_BUCKET")
 WASABI_REGION = os.environ.get("WASABI_REGION")
 STORAGE_CHANNEL_ID = os.environ.get("STORAGE_CHANNEL_ID") # Optional
 
+# --- Validate Essential Configuration ---
+if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET, WASABI_REGION]):
+    logger.critical("!!! CRITICAL ERROR: One or more environment variables are missing. Please check your .env file.")
+    exit()
+
 # --- Initialize Telegram Bot ---
 app = Client("file_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # --- Initialize Wasabi S3 Client ---
-s3 = boto3.client(
-    's3',
-    endpoint_url=f'https://s3.{WASABI_REGION}.wasabisys.com',
-    aws_access_key_id=WASABI_ACCESS_KEY,
-    aws_secret_access_key=WASABI_SECRET_KEY
-)
+try:
+    s3 = boto3.client(
+        's3',
+        endpoint_url=f'https://s3.{WASABI_REGION}.wasabisys.com',
+        aws_access_key_id=WASABI_ACCESS_KEY,
+        aws_secret_access_key=WASABI_SECRET_KEY
+    )
+    logger.info("Boto3 S3 client initialized successfully.")
+except Exception as e:
+    logger.critical(f"Failed to initialize Boto3 client: {e}")
+    exit()
 
-# In-memory dictionary to store file info (for simplicity)
-# In a real-world scenario, you would use a database.
+# In-memory dictionary for simplicity. For production, use a database.
 file_storage = {}
 file_counter = 1
 
-# --- Helper Functions ---
-async def progress(current, total, message: Message, text: str):
-    """Updates the message with upload/download progress."""
-    try:
-        await message.edit_text(f"{text}: {current * 100 / total:.1f}%")
-    except FloodWait as e:
-        await asyncio.sleep(e.x)
-    except Exception:
-        # Handle cases where the message might not be editable
-        pass
+# --- Helper Classes and Functions ---
+
+class ProgressCallback:
+    """
+    Handles progress reporting for Boto3 uploads in an async environment.
+    """
+    def __init__(self, message: Message, text: str, loop: asyncio.AbstractEventLoop):
+        self._message = message
+        self._text = text
+        self._loop = loop
+        self._size = 0
+        self._seen_so_far = 0
+        self._last_update_percentage = 0
+
+    def __call__(self, bytes_amount):
+        self._seen_so_far += bytes_amount
+        percentage = round((self._seen_so_far / self._size) * 100)
+        
+        # Update only every 5% to avoid Telegram flood limits
+        if percentage > self._last_update_percentage + 4:
+            self._last_update_percentage = percentage
+            asyncio.run_coroutine_threadsafe(
+                self._message.edit_text(f"{self._text}: {percentage}%"), self._loop
+            )
+
+    def set_size(self, size):
+        self._size = size
+
+async def run_blocking_io(func, *args):
+    """Runs a blocking I/O function in a separate thread to avoid freezing the bot."""
+    return await asyncio.to_thread(func, *args)
 
 # --- Bot Commands ---
 @app.on_message(filters.command("start"))
 async def start_command(client, message):
+    logger.info(f"Received /start command from {message.from_user.id}")
     await message.reply_text(
-        "Welcome to the File Storage Bot!\n\n"
-        "I can help you upload, download, and stream files up to 4GB using Wasabi Cloud Storage.\n\n"
-        "**Features:**\n"
-        "- 4GB File Support\n"
-        "- Wasabi Cloud Integration\n"
-        "- MX Player & VLC Integration\n"
-        "- Real-time progress updates\n\n"
+        "Welcome to the File Storage Bot! I'm now running on a more stable, non-blocking core.\n\n"
         "Use /help to see all available commands."
     )
 
 @app.on_message(filters.command("help"))
 async def help_command(client, message):
+    logger.info(f"Received /help command from {message.from_user.id}")
     help_text = """
 **Available Commands:**
 
-/start - Show welcome message and help
-/upload - Reply to a file to upload it (or just send any file)
-/download <file_id> - Download a file by its ID
-/list - List all stored files
-/stream <file_id> - Get a streaming link for a video/audio file
-/setchannel <channel_id> - Set a storage channel for backups (admin only)
-/test - Test the connection to Wasabi
-/web - Get the web player interface link (placeholder)
-/help - Show this help information
+/start - Show welcome message.
+/upload - Send any file to upload it.
+/download <file_id> - Get a download link for a file.
+/list - List all stored files.
+/stream <file_id> - Get streaming links for video/audio.
+/test - Test the connection to Wasabi storage.
+/help - Show this help message.
     """
     await message.reply_text(help_text)
 
 @app.on_message(filters.document | filters.video | filters.audio | filters.photo)
 async def upload_file_handler(client, message):
-    """Handles file uploads sent directly to the bot."""
+    """Handles all incoming files for upload."""
     global file_counter
+    user_id = message.from_user.id
+    logger.info(f"Received a file from user {user_id}.")
+
     file = message.document or message.video or message.audio or message.photo
     if not file:
-        await message.reply_text("Please send a file.")
+        await message.reply_text("Could not identify the file. Please try again.")
         return
 
     file_name = getattr(file, 'file_name', f"upload_{file.file_unique_id}.{file.mime_type.split('/')[1]}")
     file_id = str(file_counter)
     
-    progress_message = await message.reply_text("Starting download from Telegram servers...")
+    progress_message = await message.reply_text("Downloading from Telegram servers...")
 
     try:
-        # Download from Telegram
-        file_path = await message.download(
-            progress=progress,
-            progress_args=(progress_message, "Downloading from Telegram")
-        )
-        await progress_message.edit_text("Download complete. Now uploading to Wasabi...")
+        file_path = await message.download()
+        await progress_message.edit_text("Download complete. Preparing to upload to Wasabi...")
+        
+        loop = asyncio.get_running_loop()
+        progress_callback = ProgressCallback(progress_message, "Uploading to Wasabi", loop)
+        progress_callback.set_size(file.file_size)
 
-        # Upload to Wasabi
-        s3.upload_file(
+        # Run the blocking S3 upload in a separate thread
+        await run_blocking_io(
+            s3.upload_file,
             file_path,
             WASABI_BUCKET,
             file_name,
-            Callback=lambda bytes_transferred: asyncio.run(
-                progress(bytes_transferred, file.file_size, progress_message, "Uploading to Wasabi")
-            )
+            Callback=progress_callback
         )
         
-        # Store file info
         file_storage[file_id] = {'name': file_name, 'size': file.file_size}
         file_counter += 1
 
         await progress_message.edit_text(
             f"✅ **Upload Successful!**\n\n"
             f"**File Name:** `{file_name}`\n"
-            f"**File ID:** `{file_id}`\n\n"
-            f"Use `/download {file_id}` to get the file or `/stream {file_id}` to get a streaming link."
+            f"**File ID:** `{file_id}`"
         )
-
-        # Optional: Forward to backup channel
-        if STORAGE_CHANNEL_ID:
-            try:
-                await client.send_document(int(STORAGE_CHANNEL_ID), file_path, caption=f"Backup: {file_name}\nFile ID: {file_id}")
-            except Exception as e:
-                await message.reply_text(f"⚠️ Could not forward to backup channel. Error: {e}")
+        logger.info(f"Successfully uploaded {file_name} with ID {file_id}.")
 
     except NoCredentialsError:
-        await progress_message.edit_text("❌ **Error:** Wasabi credentials not found. Please check your environment variables.")
+        logger.error("Wasabi credentials not found.")
+        await progress_message.edit_text("❌ **Error:** Wasabi credentials not configured correctly.")
     except Exception as e:
-        await progress_message.edit_text(f"❌ **An error occurred:** {e}")
+        logger.error(f"An error occurred during upload: {e}", exc_info=True)
+        await progress_message.edit_text(f"❌ **An error occurred:**\n`{e}`")
     finally:
-        # Clean up the downloaded file
         if 'file_path' in locals() and os.path.exists(file_path):
             os.remove(file_path)
-
 
 @app.on_message(filters.command("download"))
 async def download_command(client, message):
@@ -148,42 +171,29 @@ async def download_command(client, message):
         await message.reply_text("❌ File ID not found.")
         return
 
-    file_info = file_storage[file_id]
-    file_name = file_info['name']
+    file_name = file_storage[file_id]['name']
     
-    progress_message = await message.reply_text("Generating download link...")
-
+    msg = await message.reply_text("Generating download link...")
     try:
-        # Generate a presigned URL for download
-        url = s3.generate_presigned_url(
-            'get_object',
-            Params={'Bucket': WASABI_BUCKET, 'Key': file_name},
-            ExpiresIn=3600  # Link expires in 1 hour
-        )
+        params = {'Bucket': WASABI_BUCKET, 'Key': file_name}
+        url = await run_blocking_io(s3.generate_presigned_url, 'get_object', Params=params, ExpiresIn=3600)
         
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Download Now", url=url)]])
-        await progress_message.edit_text(
-            f"Click the button below to download:\n\n**File:** `{file_name}`",
-            reply_markup=keyboard
-        )
-
+        await msg.edit_text(f"Click to download: **{file_name}**", reply_markup=keyboard)
     except Exception as e:
-        await progress_message.edit_text(f"❌ **Could not generate download link:** {e}")
-
+        logger.error(f"Failed to generate download link for {file_name}: {e}")
+        await msg.edit_text(f"❌ **Could not generate download link:** {e}")
 
 @app.on_message(filters.command("list"))
 async def list_files_command(client, message):
     if not file_storage:
         await message.reply_text("No files have been uploaded yet.")
         return
-
     file_list = "**Stored Files:**\n\n"
-    for file_id, info in file_storage.items():
+    for fid, info in file_storage.items():
         size_mb = info['size'] / (1024 * 1024)
-        file_list += f"**ID:** `{file_id}` - **Name:** `{info['name']}` ({size_mb:.2f} MB)\n"
-
+        file_list += f"**ID:** `{fid}` - **Name:** `{info['name']}` ({size_mb:.2f} MB)\n"
     await message.reply_text(file_list)
-
 
 @app.on_message(filters.command("stream"))
 async def stream_command(client, message):
@@ -196,18 +206,12 @@ async def stream_command(client, message):
         await message.reply_text("❌ File ID not found.")
         return
         
-    file_info = file_storage[file_id]
-    file_name = file_info['name']
+    file_name = file_storage[file_id]['name']
 
-    progress_message = await message.reply_text("Generating streaming link...")
-
+    msg = await message.reply_text("Generating streaming links...")
     try:
-        # Generate a presigned URL for streaming
-        stream_url = s3.generate_presigned_url(
-            'get_object',
-            Params={'Bucket': WASABI_BUCKET, 'Key': file_name},
-            ExpiresIn=86400  # Link valid for 24 hours
-        )
+        params = {'Bucket': WASABI_BUCKET, 'Key': file_name}
+        stream_url = await run_blocking_io(s3.generate_presigned_url, 'get_object', Params=params, ExpiresIn=86400)
 
         # Create player links
         mx_player_link = f"intent:{stream_url}#Intent;package=com.mxtech.videoplayer.ad;end"
@@ -215,39 +219,33 @@ async def stream_command(client, message):
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🚀 Open in MX Player", url=mx_player_link)],
-            [InlineKeyboardButton("🟠 Open in VLC", url=vlc_link)],
-            [InlineKeyboardButton("🌐 Web Player", url=f"https://example.com/webplayer?url={stream_url}")], # Replace with your actual web player
-            [InlineKeyboardButton("🔗 Get Direct Link", callback_data=f"getlink_{stream_url}")]
+            [InlineKeyboardButton("🟠 Open in VLC", url=vlc_link)]
         ])
         
-        await progress_message.edit_text(
-            f"**Streaming Links for:** `{file_name}`\n\n"
-            "Choose a player to start streaming.",
-            reply_markup=keyboard
-        )
-
+        await msg.edit_text(f"**Streaming Links for:** `{file_name}`", reply_markup=keyboard)
     except Exception as e:
-        await progress_message.edit_text(f"❌ **Could not generate streaming link:** {e}")
-
-# Callback query handler for the "Get Direct Link" button
-@app.on_callback_query(filters.regex("^getlink_"))
-async def get_direct_link(client, callback_query):
-    stream_url = callback_query.data.split("_")[1]
-    await callback_query.answer(f"Direct Link:\n{stream_url}", show_alert=True)
-
+        logger.error(f"Failed to generate stream link for {file_name}: {e}")
+        await msg.edit_text(f"❌ **Could not generate streaming link:** {e}")
 
 @app.on_message(filters.command("test"))
 async def test_wasabi_connection(client, message):
     try:
-        s3.list_buckets()
+        await run_blocking_io(s3.list_buckets)
         await message.reply_text("✅ Wasabi connection successful!")
     except NoCredentialsError:
-        await message.reply_text("❌ **Error:** Wasabi credentials not found. Please check your `.env` file.")
+        await message.reply_text("❌ **Error:** Wasabi credentials not found.")
     except Exception as e:
         await message.reply_text(f"❌ **Wasabi connection failed:**\n`{e}`")
 
+async def main():
+    """Main function to start the bot."""
+    await app.start()
+    me = await app.get_me()
+    logger.info(f"Bot started as @{me.username}. Waiting for messages...")
+    await asyncio.Event().wait() # Keep the bot running indefinitely
 
 if __name__ == "__main__":
-    print("Bot is starting...")
-    app.run()
-    print("Bot stopped.")
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot shutting down...")
