@@ -1,239 +1,226 @@
 import os
 import time
 import math
-import boto3
 import asyncio
-import mimetypes
-from urllib.parse import quote
-from botocore.client import Config
+from pyrogram import Client, filters
+from pyrogram.types import Message
+import boto3
 from botocore.exceptions import NoCredentialsError, PartialCredentialsError
-from dotenv import load_dotenv
-from pyrogram import Client, filters, idle
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from pyrogram.errors import FloodWait
-from aiohttp import web
 
-# --- Load Environment Variables ---
-load_dotenv()
+# --- Configuration ---
+# Load environment variables from your system
+API_ID = int(os.environ.get("API_ID", "0"))
+API_HASH = os.environ.get("API_HASH", "")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
-API_ID = os.getenv("API_ID")
-API_HASH = os.getenv("API_HASH")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+# Wasabi S3-Compatible Storage Configuration
+WASABI_ACCESS_KEY = os.environ.get("WASABI_ACCESS_KEY", "")
+WASABI_SECRET_KEY = os.environ.get("WASABI_SECRET_KEY", "")
+WASABI_BUCKET = os.environ.get("WASABI_BUCKET", "")
+WASABI_REGION = os.environ.get("WASABI_REGION", "us-east-1") # Default to us-east-1 if not set
 
-WASABI_ACCESS_KEY = os.getenv("WASABI_ACCESS_KEY")
-WASABI_SECRET_KEY = os.getenv("WASABI_SECRET_KEY")
-WASABI_BUCKET = os.getenv("WASABI_BUCKET")
-WASABI_REGION = os.getenv("WASABI_REGION")
+# Check for missing essential variables
+if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET]):
+    print("ERROR: Missing one or more required environment variables.")
+    exit(1)
+
+# Construct the Wasabi endpoint URL
 WASABI_ENDPOINT_URL = f'https://s3.{WASABI_REGION}.wasabisys.com'
 
-# --- Initialize Pyrogram Bot ---
+# --- Bot Initialization ---
+# Initialize the Pyrogram Client
 app = Client(
-    "wasabi_upload_bot",
+    "wasabi_storage_bot",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
 
-# --- State Management for Cancellations ---
-active_transfers = {}
-
-# --- Initialize Boto3 S3 Client for Wasabi ---
+# Initialize the Boto3 S3 Client for Wasabi
 try:
-    s3 = boto3.client(
+    s3_client = boto3.client(
         's3',
         endpoint_url=WASABI_ENDPOINT_URL,
         aws_access_key_id=WASABI_ACCESS_KEY,
         aws_secret_access_key=WASABI_SECRET_KEY,
-        config=Config(signature_version='s3v4'),
         region_name=WASABI_REGION
     )
-    print("✅ Successfully connected to Wasabi.")
+    print("Boto3 S3 client initialized successfully.")
 except (NoCredentialsError, PartialCredentialsError) as e:
-    print(f"❌ Error: Wasabi credentials not found or incomplete. Please check your .env file. Details: {e}")
-    s3 = None
-except Exception as e:
-    print(f"❌ An unexpected error occurred during Wasabi connection: {e}")
-    s3 = None
+    print(f"Error initializing Boto3 client: {e}. Please check your Wasabi credentials.")
+    exit(1)
 
 
 # --- Helper Functions ---
-def humanbytes(size):
-    if not size: return "0B"
-    power = 1024
-    n = 0
-    power_labels = {0: '', 1: 'K', 2: 'M', 3: 'G', 4: 'T'}
-    while size > power:
-        size /= power
-        n += 1
-    return f"{size:.2f} {power_labels[n]}B"
+def format_bytes(size_bytes):
+    """Converts bytes to a human-readable format (KB, MB, GB, etc.)."""
+    if size_bytes == 0:
+        return "0B"
+    size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
+    i = int(math.floor(math.log(size_bytes, 1024)))
+    p = math.pow(1024, i)
+    s = round(size_bytes / p, 2)
+    return f"{s} {size_name[i]}"
 
-async def progress_callback(current, total, message, start_time, action, last_update_time):
+# A dictionary to prevent spamming Telegram with progress updates
+last_update_time = {}
+
+async def progress_callback(current, total, message: Message, action: str):
+    """
+    Handles progress updates for both downloads and uploads.
+    Edits the message to show the current progress.
+    """
+    user_id = message.chat.id
     now = time.time()
-    if now - last_update_time[0] < 2: return
-    elapsed_time = now - start_time
-    if elapsed_time == 0: return
 
-    speed = current / elapsed_time
+    # Update only once per second to avoid hitting Telegram API limits
+    if user_id in last_update_time and (now - last_update_time[user_id]) < 1:
+        return
+    last_update_time[user_id] = now
+
     percentage = current * 100 / total
-    filled_len = int(percentage / 5)
-    progress_bar = "🚀" * filled_len + "─" * (20 - filled_len) if percentage < 100 else "✅" * 20
-    eta = time.strftime('%Hh %Mm %Ss', time.gmtime((total - current) / speed)) if speed > 0 else 'N/A'
+    speed = current / (now - message.date.timestamp()) if (now - message.date.timestamp()) > 0 else 0
+    
+    # Create the progress bar string
+    progress_bar = "[{0}{1}]".format(
+        '█' * int(percentage / 5),
+        ' ' * (20 - int(percentage / 5))
+    )
+
+    # Format the status message
+    status_text = (
+        f"**{action}**\n"
+        f"{progress_bar} {percentage:.2f}%\n"
+        f"**Done:** {format_bytes(current)}\n"
+        f"**Total:** {format_bytes(total)}\n"
+        f"**Speed:** {format_bytes(speed)}/s"
+    )
 
     try:
-        file_media = message.reply_to_message.document or message.reply_to_message.video or message.reply_to_message.audio
-        file_name_str = getattr(file_media, 'file_name', 'file')
-        
-        progress_text = (
-            f"**{action}**\n"
-            f"**File:** `{file_name_str}`\n"
-            f"├ `{progress_bar}`\n"
-            f"├ **Progress:** {percentage:.1f}%\n"
-            f"├ **Done:** {humanbytes(current)} of {humanbytes(total)}\n"
-            f"├ **Speed:** {humanbytes(speed)}/s\n"
-            f"└ **ETA:** {eta}"
-        )
-        transfer_id = f"{message.chat.id}-{message.reply_to_message.id}"
-        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_{transfer_id}")]]) if active_transfers.get(transfer_id) else None
-        await message.edit_text(progress_text, reply_markup=keyboard)
-        last_update_time[0] = now
-    except FloodWait as e:
-        print(f"FloodWait: sleeping for {e.value} seconds.")
-        await asyncio.sleep(e.value)
-    except Exception: pass
+        await message.edit_text(status_text)
+    except Exception as e:
+        # Handle cases where the message might not be editable
+        print(f"Error updating progress: {e}")
 
 
-# --- Bot Handlers ---
+class WasabiUploadProgress:
+    """
+    A callback class for Boto3 to track upload progress and update the Telegram message.
+    """
+    def __init__(self, message: Message, total_size: int, action: str):
+        self._message = message
+        self._total_size = total_size
+        self._seen_so_far = 0
+        self._lock = asyncio.Lock()
+        self._action = action
+
+    async def __call__(self, bytes_amount):
+        async with self._lock:
+            self._seen_so_far += bytes_amount
+            # Call the async progress callback function
+            await progress_callback(
+                self._seen_so_far, self._total_size, self._message, self._action
+            )
+
+
+# --- Bot Command Handlers ---
 @app.on_message(filters.command("start"))
 async def start_handler(_, message: Message):
-    await message.reply_text("👋 Hello! I create direct streaming links for VLC, MX Player, and web browsers. Just send me a file.")
+    """Handles the /start command."""
+    await message.reply_text(
+        "Hello! I'm your Telegram to Wasabi Storage bot.\n\n"
+        "Send me any file (up to 5GB), and I will upload it to Wasabi and provide you with a direct, shareable link."
+    )
 
+# --- Bot File Handling Logic ---
 @app.on_message(filters.document | filters.video | filters.audio)
 async def file_handler(_, message: Message):
-    if not s3:
-        await message.reply_text("⚠️ **Connection Error:** Could not connect to Wasabi. Please check config.")
-        return
+    """Handles incoming files (documents, videos, audios)."""
+    
     media = message.document or message.video or message.audio
-    if not media: return
-    file_name, file_size = media.file_name, media.file_size
-    if file_size > 4 * 1024 * 1024 * 1024:
-        await message.reply_text("❌ **Error:** File is larger than 4 GB.")
+    if not media:
+        await message.reply_text("Unsupported file type.")
         return
-    transfer_id = f"{message.chat.id}-{message.id}"
-    active_transfers[transfer_id] = {"cancelled": False}
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_{transfer_id}")]])
-    status_message = await message.reply_text(f"🚀 Preparing to turbo-stream `{file_name}`...", reply_markup=keyboard)
-    start_time, last_update_time = time.time(), [time.time()]
-    content_type, _ = mimetypes.guess_type(file_name)
-    content_type = content_type or "application/octet-stream"
 
-    def create_upload(): return s3.create_multipart_upload(Bucket=WASABI_BUCKET, Key=file_name, ContentType=content_type, ContentDisposition='inline')
-    def upload_part(uid, pn, ch): return s3.upload_part(Bucket=WASABI_BUCKET, Key=file_name, UploadId=uid, PartNumber=pn, Body=ch)
-    def complete_upload(uid, p): return s3.complete_multipart_upload(Bucket=WASABI_BUCKET, Key=file_name, UploadId=uid, MultipartUpload={'Parts': p})
-    def abort_upload(uid): return s3.abort_multipart_upload(Bucket=WASABI_BUCKET, Key=file_name, UploadId=uid)
+    file_name = media.file_name
+    file_size = media.file_size
     
-    upload_id = None
-    try:
-        multi_part_upload = await asyncio.to_thread(create_upload)
-        upload_id = multi_part_upload['UploadId']
-        parts, part_number, seen_so_far = [], 1, 0
-        MIN_PART_SIZE = 5 * 1024 * 1024 
-        buffer = bytearray()
-        async for chunk in app.stream_media(message):
-            if active_transfers.get(transfer_id, {}).get("cancelled"):
-                raise UserWarning("Transfer cancelled by user.")
-            buffer.extend(chunk)
-            seen_so_far += len(chunk)
-            while len(buffer) >= MIN_PART_SIZE:
-                part_chunk, buffer = buffer[:MIN_PART_SIZE], buffer[MIN_PART_SIZE:]
-                part_response = await asyncio.to_thread(upload_part, upload_id, part_number, part_chunk)
-                parts.append({'PartNumber': part_number, 'ETag': part_response['ETag']})
-                part_number += 1
-            await progress_callback(seen_so_far, file_size, status_message, start_time, "⚡ Streaming to Cloud", last_update_time)
-        if buffer:
-            part_response = await asyncio.to_thread(upload_part, upload_id, part_number, bytes(buffer))
-            parts.append({'PartNumber': part_number, 'ETag': part_response['ETag']})
-        await asyncio.to_thread(complete_upload, upload_id, parts)
+    # Check if the file size is within a reasonable limit (e.g., 5GB)
+    if file_size > 5 * 1024 * 1024 * 1024:
+        await message.reply_text("Sorry, the file is too large. The maximum supported size is 5 GB.")
+        return
         
-        presigned_url = s3.generate_presigned_url('get_object', Params={'Bucket': WASABI_BUCKET, 'Key': file_name}, ExpiresIn=604800)
-        encoded_url = quote(presigned_url, safe="")
-        vlc_url = f"vlc://{encoded_url}"
-        mx_player_url = f"intent:{presigned_url}#Intent;action=android.intent.action.VIEW;package=com.mxtech.videoplayer.ad;end"
-        duration = time.strftime('%Hh %Mm %Ss', time.gmtime(time.time() - start_time))
-        final_message = (f"✅ **Upload Complete!**\n\n📄 **File:** `{file_name}`\n📦 **Size:** `{humanbytes(file_size)}`\n"
-                         f"⏱️ **Duration:** `{duration}`\n\n**Copy Link:**\n`{presigned_url}`\n")
-        player_buttons = [[InlineKeyboardButton("▶️ Play in VLC", url=vlc_url), InlineKeyboardButton("▶️ Play in MX Player", url=mx_player_url)],
-                          [InlineKeyboardButton("🌐 Open in Browser", url=presigned_url)]]
-        await status_message.edit_text(final_message, reply_markup=InlineKeyboardMarkup(player_buttons))
-    except UserWarning:
-        await status_message.edit_text(f"❌ **Transfer Cancelled.**\n`{file_name}`")
-        if upload_id: await asyncio.to_thread(abort_upload, upload_id)
+    status_msg = await message.reply_text("Preparing to process your file...")
+    local_file_path = None
+
+    try:
+        # 1. Download from Telegram
+        await status_msg.edit_text(f"Downloading `{file_name}` from Telegram...")
+        
+        start_time = time.time()
+        
+        local_file_path = await app.download_media(
+            message=message,
+            progress=progress_callback,
+            progress_args=(status_msg, "Downloading...")
+        )
+        
+        download_time = time.time() - start_time
+        await status_msg.edit_text(
+            f"Downloaded `{file_name}` in {download_time:.2f} seconds. Now uploading to Wasabi..."
+        )
+        
+        # 2. Upload to Wasabi Storage
+        upload_start_time = time.time()
+        
+        # Create an instance of the progress callback class for boto3
+        upload_progress = WasabiUploadProgress(status_msg, file_size, "Uploading...")
+        
+        # Run the synchronous boto3 upload in a separate thread to keep it non-blocking
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,  # Use default executor
+            s3_client.upload_file,
+            local_file_path,
+            WASABI_BUCKET,
+            file_name, # Use original file name as the object key in Wasabi
+            Callback=upload_progress
+        )
+        
+        upload_time = time.time() - upload_start_time
+        await status_msg.edit_text(f"Uploaded to Wasabi in {upload_time:.2f} seconds. Generating link...")
+
+        # 3. Generate a pre-signed URL for sharing
+        # This link will be valid for 24 hours (86400 seconds)
+        presigned_url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': WASABI_BUCKET, 'Key': file_name},
+            ExpiresIn=86400
+        )
+        
+        # 4. Send the final link to the user
+        await status_msg.edit_text(
+            f"**File Upload Complete!**\n\n"
+            f"**File:** `{file_name}`\n"
+            f"**Size:** {format_bytes(file_size)}\n\n"
+            f"**Your direct link (valid for 24 hours):**\n"
+            f"`{presigned_url}`\n\n"
+            f"This link can be used with media players like VLC and MX Player."
+        )
+
     except Exception as e:
-        await status_message.edit_text(f"❌ **Stream Upload Failed:** {e}")
-        if upload_id: await asyncio.to_thread(abort_upload, upload_id)
-    finally:
-        if transfer_id in active_transfers: del active_transfers[transfer_id]
-
-@app.on_callback_query(filters.regex("^cancel_"))
-async def cancel_handler(_, query):
-    transfer_id = query.data.split("_")[1]
-    if transfer_id in active_transfers:
-        active_transfers[transfer_id]["cancelled"] = True
-        await query.answer("Cancelling transfer...", show_alert=False)
-        try: await query.message.edit_text("⏳ Cancelling the transfer, please wait...")
-        except Exception: pass
-    else:
-        await query.answer("This transfer is already complete or has been cancelled.", show_alert=True)
-        try: await query.message.edit_reply_markup(None)
-        except Exception: pass
-
-
-# --- Web Server for Health Checks (Required for some deployment platforms) ---
-async def run_web_server():
-    """Initializes and runs the aiohttp web server in the background."""
-    async def health_check(request):
-        return web.Response(text="OK", status=200)
-
-    webapp = web.Application()
-    webapp.router.add_get("/", health_check)
-    runner = web.AppRunner(webapp)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 8080)) # Use 8080 as a common default
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    
-    try:
-        await site.start()
-        print(f"✅ Web server is listening on port {port} for health checks.")
-        await asyncio.Future() # Keep the server running indefinitely until cancelled
-    finally:
-        await runner.cleanup()
-        print("🛑 Web server stopped.")
-
-
-# --- MAIN EXECUTION BLOCK ---
-async def main():
-    """Starts the bot and the background web server, and handles graceful shutdown."""
-    web_server_task = asyncio.create_task(run_web_server())
-
-    try:
-        print("--- Starting Telegram Bot ---")
-        await app.start()
-        print("✅ Telegram Bot is now online.")
-        await idle()
-    finally:
-        print("\n--- Shutting down services... ---")
-        await app.stop()
-        print("🛑 Telegram Bot stopped.")
+        print(f"An error occurred: {e}")
+        await status_msg.edit_text(f"An error occurred during the process: {str(e)}")
         
-        web_server_task.cancel()
-        try:
-            await web_server_task
-        except asyncio.CancelledError:
-            print("Web server task cancelled successfully.")
+    finally:
+        # 5. Clean up the downloaded file
+        if local_file_path and os.path.exists(local_file_path):
+            os.remove(local_file_path)
+            print(f"Cleaned up temporary file: {local_file_path}")
 
 
+# --- Main Execution ---
 if __name__ == "__main__":
-    print("Bot starting up...")
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        print("\nShutdown signal received.")
+    print("Bot is starting...")
+    app.run()
+    print("Bot has stopped.")
