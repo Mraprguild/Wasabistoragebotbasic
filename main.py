@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait
+from aiohttp import web
 
 # --- Load Environment Variables ---
 load_dotenv()
@@ -185,18 +186,54 @@ async def cancel_handler(_, query):
         try: await query.message.edit_reply_markup(None)
         except Exception: pass
 
+
+# --- Web Server for Health Checks (Required for some deployment platforms) ---
+async def run_web_server():
+    """Initializes and runs the aiohttp web server in the background."""
+    async def health_check(request):
+        return web.Response(text="OK", status=200)
+
+    webapp = web.Application()
+    webapp.router.add_get("/", health_check)
+    runner = web.AppRunner(webapp)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080)) # Use 8080 as a common default
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    
+    try:
+        await site.start()
+        print(f"✅ Web server is listening on port {port} for health checks.")
+        await asyncio.Future() # Keep the server running indefinitely until cancelled
+    finally:
+        await runner.cleanup()
+        print("🛑 Web server stopped.")
+
+
 # --- MAIN EXECUTION BLOCK ---
 async def main():
-    """Starts and runs the Telegram bot."""
-    await app.start()
-    print("✅ Telegram Bot is now online.")
-    await idle()
-    await app.stop()
-    print("🛑 Telegram Bot stopped.")
+    """Starts the bot and the background web server, and handles graceful shutdown."""
+    web_server_task = asyncio.create_task(run_web_server())
+
+    try:
+        print("--- Starting Telegram Bot ---")
+        await app.start()
+        print("✅ Telegram Bot is now online.")
+        await idle()
+    finally:
+        print("\n--- Shutting down services... ---")
+        await app.stop()
+        print("🛑 Telegram Bot stopped.")
+        
+        web_server_task.cancel()
+        try:
+            await web_server_task
+        except asyncio.CancelledError:
+            print("Web server task cancelled successfully.")
+
 
 if __name__ == "__main__":
     print("Bot starting up...")
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        print("\nShutdown signal received. Bot is stopping.")
+        print("\nShutdown signal received.")
