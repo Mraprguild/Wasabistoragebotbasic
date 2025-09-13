@@ -17,7 +17,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 # Defaults to Render's external URL if available.
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", os.environ.get("RENDER_EXTERNAL_URL", ""))
 # Port to listen on, defaults to 5000
-PORT = int(os.environ.get("PORT", 5000))
+PORT = int(os.environ.get("PORT", 10000))
 
 
 # Wasabi S3-Compatible Storage Configuration
@@ -272,4 +272,4 @@ if __name__ == "__main__":
 
     print(f"Bot is starting... Listening on host 0.0.0.0 and port {PORT}")
     # Run the web app, listening on all available network interfaces
-    web.run_app(web_app, host="0.0.0.0", port=PORT)
+    web.run_app(web_app, host="0.0.0.0", port=10000)
