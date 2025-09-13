@@ -6,12 +6,18 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 import boto3
 from botocore.exceptions import NoCredentialsError, PartialCredentialsError
+from aiohttp import web
 
 # --- Configuration ---
 # Load environment variables from your system
 API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+# The public URL where your bot is hosted. E.g., "https://your-domain.com"
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
+# Port to listen on, defaults to 5000
+PORT = int(os.environ.get("PORT", 5000))
+
 
 # Wasabi S3-Compatible Storage Configuration
 WASABI_ACCESS_KEY = os.environ.get("WASABI_ACCESS_KEY", "")
@@ -20,20 +26,21 @@ WASABI_BUCKET = os.environ.get("WASABI_BUCKET", "")
 WASABI_REGION = os.environ.get("WASABI_REGION", "us-east-1") # Default to us-east-1 if not set
 
 # Check for missing essential variables
-if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET]):
-    print("ERROR: Missing one or more required environment variables.")
+if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET, WEBHOOK_URL]):
+    print("ERROR: Missing one or more required environment variables. Ensure WEBHOOK_URL is set.")
     exit(1)
 
 # Construct the Wasabi endpoint URL
 WASABI_ENDPOINT_URL = f'https://s3.{WASABI_REGION}.wasabisys.com'
 
 # --- Bot Initialization ---
-# Initialize the Pyrogram Client
+# Initialize the Pyrogram Client for webhook mode
 app = Client(
     "wasabi_storage_bot",
     api_id=API_ID,
     api_hash=API_HASH,
-    bot_token=BOT_TOKEN
+    bot_token=BOT_TOKEN,
+    no_updates=True  # Disable internal polling
 )
 
 # Initialize the Boto3 S3 Client for Wasabi
@@ -227,8 +234,40 @@ async def file_handler(_, message: Message):
             print(f"Cleaned up temporary file: {local_file_path}")
 
 
+# --- Webhook and Server Logic ---
+
+async def webhook_handler(request):
+    """Handles incoming updates from Telegram."""
+    try:
+        update_data = await request.read()
+        await app.feed_raw_update(update_data)
+        return web.Response(status=200)
+    except Exception as e:
+        print(f"Error in webhook handler: {e}")
+        return web.Response(status=500)
+
+async def start_bot_webhook(_):
+    """Starts the bot client and sets the webhook."""
+    await app.start()
+    webhook_path = f"/{BOT_TOKEN}"
+    await app.set_webhook(url=f"{WEBHOOK_URL}{webhook_path}")
+    print(f"Webhook set to: {WEBHOOK_URL}{webhook_path}")
+
+async def stop_bot_webhook(_):
+    """Stops the bot client."""
+    await app.stop()
+    print("Bot has stopped.")
+
 # --- Main Execution ---
 if __name__ == "__main__":
-    print("Bot is starting...")
-    app.run()
-    print("Bot has stopped.")
+    web_app = web.Application()
+    
+    # Define startup and shutdown tasks
+    web_app.on_startup.append(start_bot_webhook)
+    web_app.on_shutdown.append(stop_bot_webhook)
+    
+    # Set up the webhook route
+    web_app.router.add_post(f"/{BOT_TOKEN}", webhook_handler)
+
+    print(f"Bot is starting... Listening on port {PORT}")
+    web.run_app(web_app, port=PORT)
