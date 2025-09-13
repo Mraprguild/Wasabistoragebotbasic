@@ -106,21 +106,25 @@ async def progress_callback(current, total, message: Message, action: str):
 class WasabiUploadProgress:
     """
     A callback class for Boto3 to track upload progress and update the Telegram message.
+    It is called from a separate thread, so it needs to schedule the async update on the main event loop.
     """
-    def __init__(self, message: Message, total_size: int, action: str):
+    def __init__(self, message: Message, total_size: int, action: str, loop):
         self._message = message
         self._total_size = total_size
         self._seen_so_far = 0
-        self._lock = asyncio.Lock()
         self._action = action
+        self._loop = loop
 
-    async def __call__(self, bytes_amount):
-        async with self._lock:
-            self._seen_so_far += bytes_amount
-            # Call the async progress callback function
-            await progress_callback(
+    def __call__(self, bytes_amount):
+        """The callback method invoked by boto3."""
+        self._seen_so_far += bytes_amount
+        # Schedule the async progress_callback to run on the main event loop
+        asyncio.run_coroutine_threadsafe(
+            progress_callback(
                 self._seen_so_far, self._total_size, self._message, self._action
-            )
+            ),
+            self._loop
+        )
 
 
 # --- Bot Command Handlers ---
@@ -173,18 +177,22 @@ async def file_handler(_, message: Message):
         # 2. Upload to Wasabi Storage
         upload_start_time = time.time()
         
+        # Get the current event loop to schedule callbacks from the other thread
+        loop = asyncio.get_event_loop()
+        
         # Create an instance of the progress callback class for boto3
-        upload_progress = WasabiUploadProgress(status_msg, file_size, "Uploading...")
+        upload_progress = WasabiUploadProgress(status_msg, file_size, "Uploading...", loop)
         
         # Run the synchronous boto3 upload in a separate thread to keep it non-blocking
-        loop = asyncio.get_event_loop()
         await loop.run_in_executor(
             None,  # Use default executor
-            s3_client.upload_file,
-            local_file_path,
-            WASABI_BUCKET,
-            file_name, # Use original file name as the object key in Wasabi
-            Callback=upload_progress
+            # Use a lambda to pass keyword arguments correctly
+            lambda: s3_client.upload_file(
+                local_file_path,
+                WASABI_BUCKET,
+                file_name,
+                Callback=upload_progress
+            )
         )
         
         upload_time = time.time() - upload_start_time
