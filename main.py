@@ -7,6 +7,7 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from pyrogram.errors import FloodWait
 from dotenv import load_dotenv
+from aiohttp import web
 
 # --- Basic Logging Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -45,26 +46,28 @@ except Exception as e:
     logger.critical(f"Failed to initialize Boto3 client: {e}")
     exit()
 
+# --- State Management ---
 # In-memory dictionary for simplicity. For production, use a database.
 file_storage = {}
 file_counter = 1
+# Lock to prevent race conditions when updating the file counter from concurrent tasks
+file_counter_lock = asyncio.Lock()
 
 # --- Helper Classes and Functions ---
-
 class ProgressCallback:
-    """
-    Handles progress reporting for Boto3 uploads in an async environment.
-    """
+    """Handles progress reporting for Boto3 uploads in an async environment."""
     def __init__(self, message: Message, text: str, loop: asyncio.AbstractEventLoop):
         self._message = message
         self._text = text
         self._loop = loop
         self._size = 0
         self._seen_so_far = 0
-        self._last_update_percentage = 0
+        self._last_update_percentage = -1 # Start at -1 to ensure first update happens
 
     def __call__(self, bytes_amount):
         self._seen_so_far += bytes_amount
+        if self._size == 0:
+            return
         percentage = round((self._seen_so_far / self._size) * 100)
         
         # Update only every 5% to avoid Telegram flood limits
@@ -75,16 +78,72 @@ class ProgressCallback:
             )
 
     def set_size(self, size):
-        self._size = size
+        self._size = size if size > 0 else 1 # Avoid division by zero
 
 async def run_blocking_io(func, *args):
-    """Runs a blocking I/O function in a separate thread to avoid freezing the bot."""
+    """Runs a blocking I/O function in a separate thread."""
     return await asyncio.to_thread(func, *args)
+
+async def process_file_upload(message: Message, client: Client):
+    """
+    This function runs as a background task to handle a single file upload.
+    It downloads the file from Telegram, uploads it to Wasabi, and updates the user.
+    """
+    global file_counter
+    file = message.document or message.video or message.audio or message.photo
+    
+    file_name = getattr(file, 'file_name', f"upload_{file.file_unique_id}.{file.mime_type.split('/')[1]}")
+    
+    progress_message = await message.reply_text("Processing... Starting download from Telegram.", quote=True)
+    file_path = None
+    try:
+        # Step 1: Download from Telegram
+        file_path = await message.download()
+        
+        await progress_message.edit_text("Download complete. Preparing to upload to Wasabi...")
+        
+        # Step 2: Upload to Wasabi
+        loop = asyncio.get_running_loop()
+        progress_callback = ProgressCallback(progress_message, "Uploading to Wasabi", loop)
+        progress_callback.set_size(file.file_size)
+
+        await run_blocking_io(
+            s3.upload_file,
+            file_path,
+            WASABI_BUCKET,
+            file_name,
+            Callback=progress_callback
+        )
+        
+        # Step 3: Update records safely and notify user
+        async with file_counter_lock:
+            file_id = str(file_counter)
+            file_storage[file_id] = {'name': file_name, 'size': file.file_size}
+            file_counter += 1
+
+        await progress_message.edit_text(
+            f"✅ **Upload Successful!**\n\n"
+            f"**File Name:** `{file_name}`\n"
+            f"**File ID:** `{file_id}`"
+        )
+        logger.info(f"Successfully uploaded {file_name} with ID {file_id}.")
+
+    except Exception as e:
+        logger.error(f"An error occurred during background upload for user {message.from_user.id}: {e}", exc_info=True)
+        await progress_message.edit_text(f"❌ **An error occurred during processing:**\n`{e}`")
+    finally:
+        # Step 4: Cleanup the downloaded file
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+
+# --- Web Server for Render ---
+async def health_check(request):
+    """A simple health check endpoint for the hosting platform."""
+    return web.Response(text="Bot is alive and running!")
 
 # --- Bot Commands ---
 @app.on_message(filters.command("start"))
 async def start_command(client, message):
-    logger.info(f"Received /start command from {message.from_user.id}")
     await message.reply_text(
         "Welcome to the File Storage Bot! I'm now running on a more stable, non-blocking core.\n\n"
         "Use /help to see all available commands."
@@ -92,7 +151,6 @@ async def start_command(client, message):
 
 @app.on_message(filters.command("help"))
 async def help_command(client, message):
-    logger.info(f"Received /help command from {message.from_user.id}")
     help_text = """
 **Available Commands:**
 
@@ -108,57 +166,19 @@ async def help_command(client, message):
 
 @app.on_message(filters.document | filters.video | filters.audio | filters.photo)
 async def upload_file_handler(client, message):
-    """Handles all incoming files for upload."""
-    global file_counter
-    user_id = message.from_user.id
-    logger.info(f"Received a file from user {user_id}.")
-
-    file = message.document or message.video or message.audio or message.photo
-    if not file:
-        await message.reply_text("Could not identify the file. Please try again.")
-        return
-
-    file_name = getattr(file, 'file_name', f"upload_{file.file_unique_id}.{file.mime_type.split('/')[1]}")
-    file_id = str(file_counter)
+    """
+    This handler now acts as a gatekeeper. It acknowledges the file
+    and immediately schedules the actual processing to run in the background.
+    """
+    await message.reply_text(
+        "✅ Request received. Your file has been added to the processing queue.",
+        quote=True
+    )
+    logger.info(f"Queued file from user {message.from_user.id} for processing.")
     
-    progress_message = await message.reply_text("Downloading from Telegram servers...")
+    # Schedule the heavy lifting (download/upload) to run in the background
+    asyncio.create_task(process_file_upload(message, client))
 
-    try:
-        file_path = await message.download()
-        await progress_message.edit_text("Download complete. Preparing to upload to Wasabi...")
-        
-        loop = asyncio.get_running_loop()
-        progress_callback = ProgressCallback(progress_message, "Uploading to Wasabi", loop)
-        progress_callback.set_size(file.file_size)
-
-        # Run the blocking S3 upload in a separate thread
-        await run_blocking_io(
-            s3.upload_file,
-            file_path,
-            WASABI_BUCKET,
-            file_name,
-            Callback=progress_callback
-        )
-        
-        file_storage[file_id] = {'name': file_name, 'size': file.file_size}
-        file_counter += 1
-
-        await progress_message.edit_text(
-            f"✅ **Upload Successful!**\n\n"
-            f"**File Name:** `{file_name}`\n"
-            f"**File ID:** `{file_id}`"
-        )
-        logger.info(f"Successfully uploaded {file_name} with ID {file_id}.")
-
-    except NoCredentialsError:
-        logger.error("Wasabi credentials not found.")
-        await progress_message.edit_text("❌ **Error:** Wasabi credentials not configured correctly.")
-    except Exception as e:
-        logger.error(f"An error occurred during upload: {e}", exc_info=True)
-        await progress_message.edit_text(f"❌ **An error occurred:**\n`{e}`")
-    finally:
-        if 'file_path' in locals() and os.path.exists(file_path):
-            os.remove(file_path)
 
 @app.on_message(filters.command("download"))
 async def download_command(client, message):
@@ -213,7 +233,6 @@ async def stream_command(client, message):
         params = {'Bucket': WASABI_BUCKET, 'Key': file_name}
         stream_url = await run_blocking_io(s3.generate_presigned_url, 'get_object', Params=params, ExpiresIn=86400)
 
-        # Create player links
         mx_player_link = f"intent:{stream_url}#Intent;package=com.mxtech.videoplayer.ad;end"
         vlc_link = f"vlc://{stream_url}"
 
@@ -238,11 +257,22 @@ async def test_wasabi_connection(client, message):
         await message.reply_text(f"❌ **Wasabi connection failed:**\n`{e}`")
 
 async def main():
-    """Main function to start the bot."""
+    """Main function to start the bot and the web server."""
+    port = int(os.environ.get("PORT", 5000))
+
+    web_app = web.Application()
+    web_app.add_routes([web.get('/', health_check)])
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+
     await app.start()
+    await site.start()
+    
     me = await app.get_me()
-    logger.info(f"Bot started as @{me.username}. Waiting for messages...")
-    await asyncio.Event().wait() # Keep the bot running indefinitely
+    logger.info(f"Bot started as @{me.username}. Web server running on http://0.0.0.0:{port}")
+    
+    await asyncio.Event().wait() 
 
 if __name__ == "__main__":
     try:
