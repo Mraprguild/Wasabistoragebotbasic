@@ -2,6 +2,7 @@ import os
 import time
 import math
 import boto3
+import asyncio
 from botocore.client import Config
 from botocore.exceptions import NoCredentialsError, PartialCredentialsError
 from dotenv import load_dotenv
