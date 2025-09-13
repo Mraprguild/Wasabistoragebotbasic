@@ -15,4 +15,5 @@ dependencies = [
     "Flask>=3.1.2",
     "flask-cors>=6.0.1",
     "fastapi>=0.116.1",
+    "uvicorn>=0.35.0",
 ]
