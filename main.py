@@ -4,7 +4,6 @@ import math
 import boto3
 import asyncio
 import mimetypes
-from datetime import datetime
 from urllib.parse import quote
 from botocore.client import Config
 from botocore.exceptions import NoCredentialsError, PartialCredentialsError
@@ -12,7 +11,6 @@ from dotenv import load_dotenv
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait
-from aiohttp import web
 
 # --- Load Environment Variables ---
 load_dotenv()
@@ -57,7 +55,7 @@ except Exception as e:
     s3 = None
 
 
-# --- Helper Functions (No changes from previous version) ---
+# --- Helper Functions ---
 def humanbytes(size):
     if not size: return "0B"
     power = 1024
@@ -103,7 +101,7 @@ async def progress_callback(current, total, message, start_time, action, last_up
     except Exception: pass
 
 
-# --- Bot Handlers (No changes from previous version) ---
+# --- Bot Handlers ---
 @app.on_message(filters.command("start"))
 async def start_handler(_, message: Message):
     await message.reply_text("👋 Hello! I create direct streaming links for VLC, MX Player, and web browsers. Just send me a file.")
@@ -187,58 +185,18 @@ async def cancel_handler(_, query):
         try: await query.message.edit_reply_markup(None)
         except Exception: pass
 
-# --- SECONDARY SERVICE: Web Server for Health Checks ---
-async def run_web_server():
-    """Initializes and runs the aiohttp web server."""
-    async def health_check(request):
-        return web.Response(text="OK", status=200)
-
-    webapp = web.Application()
-    webapp.router.add_get("/", health_check)
-    runner = web.AppRunner(webapp)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 5000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    
-    try:
-        await site.start()
-        print(f"✅ Web server (secondary) is listening on port {port}.")
-        # Keep the server running indefinitely until its task is cancelled
-        await asyncio.Future()
-    finally:
-        await runner.cleanup()
-        print("🛑 Web server stopped.")
-
 # --- MAIN EXECUTION BLOCK ---
 async def main():
-    """Main function to start the bot and web server."""
-    # Launch the secondary web server as a background task
-    web_server_task = asyncio.create_task(run_web_server())
-
-    # Start the primary application: the Telegram bot
-    # This will run in the foreground and block until the bot is stopped
-    print("--- Starting Primary Service: Telegram Bot ---")
+    """Starts and runs the Telegram bot."""
     await app.start()
     print("✅ Telegram Bot is now online.")
-
-    # Keep the bot running
     await idle()
-
-    # After the bot is stopped (e.g., via Ctrl+C), stop the bot client and cancel the web server task
-    print("\n--- Shutting down services... ---")
     await app.stop()
     print("🛑 Telegram Bot stopped.")
-    
-    web_server_task.cancel()
-    try:
-        await web_server_task
-    except asyncio.CancelledError:
-        print("Web server task cancelled successfully.")
-
 
 if __name__ == "__main__":
     print("Bot starting up...")
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        print("Shutdown signal received.")
+        print("\nShutdown signal received. Bot is stopping.")
