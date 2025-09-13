@@ -18,7 +18,6 @@ from typing import Optional
 from pyrogram import Client, filters
 from pyrogram.types import Message
 import boto3
-import aioboto3
 from fastapi import FastAPI, Response, Request
 import uvicorn
 
@@ -86,7 +85,7 @@ def make_progress_updater(title: str, chat_id: int, message_id: int):
     return progress
 
 async def upload_file_to_wasabi(local_path: Path, key: str, progress_callback=None):
-    session = aioboto3.Session()
+    session = boto3.Session()
     async with session.client(
         "s3",
         endpoint_url=f"https://s3.{WASABI_REGION}.wasabisys.com",
