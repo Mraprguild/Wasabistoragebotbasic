@@ -14,7 +14,8 @@ API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 # The public URL where your bot is hosted. E.g., "https://your-domain.com"
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
+# Defaults to Render's external URL if available.
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", os.environ.get("RENDER_EXTERNAL_URL", ""))
 # Port to listen on, defaults to 5000
 PORT = int(os.environ.get("PORT", 5000))
 
