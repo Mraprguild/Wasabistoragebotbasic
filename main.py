@@ -2,6 +2,7 @@ import os
 import time
 import math
 import asyncio
+import json
 from pyrogram import Client, filters
 from pyrogram.types import Message
 import boto3
@@ -17,7 +18,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 # Defaults to Render's external URL if available.
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", os.environ.get("RENDER_EXTERNAL_URL", ""))
 # Port to listen on, defaults to 5000
-PORT = int(os.environ.get("PORT", 10000))
+PORT = int(os.environ.get("PORT", 5000))
 
 
 # Wasabi S3-Compatible Storage Configuration
@@ -73,7 +74,7 @@ def format_bytes(size_bytes):
 # A dictionary to prevent spamming Telegram with progress updates
 last_update_time = {}
 
-async def progress_callback(current, total, message: Message, action: str):
+async def progress_callback(current, total, message: Message, action: str, start_time: float):
     """
     Handles progress updates for both downloads and uploads.
     Edits the message to show the current progress.
@@ -87,7 +88,8 @@ async def progress_callback(current, total, message: Message, action: str):
     last_update_time[user_id] = now
 
     percentage = current * 100 / total
-    speed = current / (now - message.date.timestamp()) if (now - message.date.timestamp()) > 0 else 0
+    elapsed_time = now - start_time
+    speed = current / elapsed_time if elapsed_time > 0 else 0
     
     # Create the progress bar string
     progress_bar = "[{0}{1}]".format(
@@ -116,12 +118,13 @@ class WasabiUploadProgress:
     A callback class for Boto3 to track upload progress and update the Telegram message.
     It is called from a separate thread, so it needs to schedule the async update on the main event loop.
     """
-    def __init__(self, message: Message, total_size: int, action: str, loop):
+    def __init__(self, message: Message, total_size: int, action: str, loop, start_time: float):
         self._message = message
         self._total_size = total_size
         self._seen_so_far = 0
         self._action = action
         self._loop = loop
+        self._start_time = start_time
 
     def __call__(self, bytes_amount):
         """The callback method invoked by boto3."""
@@ -129,7 +132,7 @@ class WasabiUploadProgress:
         # Schedule the async progress_callback to run on the main event loop
         asyncio.run_coroutine_threadsafe(
             progress_callback(
-                self._seen_so_far, self._total_size, self._message, self._action
+                self._seen_so_far, self._total_size, self._message, self._action, self._start_time
             ),
             self._loop
         )
@@ -174,7 +177,7 @@ async def file_handler(_, message: Message):
         local_file_path = await app.download_media(
             message=message,
             progress=progress_callback,
-            progress_args=(status_msg, "Downloading...")
+            progress_args=(status_msg, "Downloading...", start_time)
         )
         
         download_time = time.time() - start_time
@@ -189,7 +192,7 @@ async def file_handler(_, message: Message):
         loop = asyncio.get_event_loop()
         
         # Create an instance of the progress callback class for boto3
-        upload_progress = WasabiUploadProgress(status_msg, file_size, "Uploading...", loop)
+        upload_progress = WasabiUploadProgress(status_msg, file_size, "Uploading...", loop, upload_start_time)
         
         # Run the synchronous boto3 upload in a separate thread to keep it non-blocking
         await loop.run_in_executor(
@@ -238,11 +241,24 @@ async def file_handler(_, message: Message):
 # --- Webhook and Server Logic ---
 
 async def webhook_handler(request):
-    """Handles incoming updates from Telegram."""
+    """
+    Handles incoming updates from Telegram, acknowledges them immediately,
+    and processes them in a background task.
+    """
     try:
-        update_data = await request.read()
-        await app.feed_raw_update(update_data)
+        # Decode the request body and parse the JSON update
+        request_body_bytes = await request.read()
+        update_json = json.loads(request_body_bytes.decode('utf-8'))
+
+        # Create a background task to process the update.
+        # This allows us to return a 200 OK to Telegram instantly, preventing timeouts.
+        asyncio.create_task(app.feed_update(update_json))
+
+        # Acknowledge the request immediately
         return web.Response(status=200)
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON from Telegram: {e}")
+        return web.Response(status=400) # Bad Request for invalid JSON
     except Exception as e:
         print(f"Error in webhook handler: {e}")
         return web.Response(status=500)
@@ -255,9 +271,21 @@ async def start_bot_webhook(_):
     print(f"Webhook set to: {WEBHOOK_URL}{webhook_path}")
 
 async def stop_bot_webhook(_):
-    """Stops the bot client."""
+    """Stops the bot client and cancels pending tasks for a graceful shutdown."""
+    print("Shutting down... Stopping bot client.")
     await app.stop()
-    print("Bot has stopped.")
+    print("Bot client stopped. Cancelling any pending tasks...")
+
+    # Get all running tasks, excluding the current one (the shutdown task)
+    tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    
+    # Cancel all pending tasks
+    for task in tasks:
+        task.cancel()
+
+    # Wait for all tasks to be cancelled
+    await asyncio.gather(*tasks, return_exceptions=True)
+    print("All pending tasks have been cancelled. Shutdown complete.")
 
 # --- Main Execution ---
 if __name__ == "__main__":
@@ -272,4 +300,4 @@ if __name__ == "__main__":
 
     print(f"Bot is starting... Listening on host 0.0.0.0 and port {PORT}")
     # Run the web app, listening on all available network interfaces
-    web.run_app(web_app, host="0.0.0.0", port=10000)
+    web.run_app(web_app, host="0.0.0.0", port=PORT)
