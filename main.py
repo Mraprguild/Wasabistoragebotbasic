@@ -270,5 +270,6 @@ if __name__ == "__main__":
     # Set up the webhook route
     web_app.router.add_post(f"/{BOT_TOKEN}", webhook_handler)
 
-    print(f"Bot is starting... Listening on port {PORT}")
-    web.run_app(web_app, port=PORT)
+    print(f"Bot is starting... Listening on host 0.0.0.0 and port {PORT}")
+    # Run the web app, listening on all available network interfaces
+    web.run_app(web_app, host="0.0.0.0", port=PORT)
