@@ -12,6 +12,7 @@ import asyncio
 import tempfile
 import logging
 import time
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -183,17 +184,18 @@ async def stream_file(key: str, request: Request):
     return Response(content=iterator(), media_type="application/octet-stream")
 
 # ---------- Entrypoint ---------- #
+def start_fastapi():
+    uvicorn.run(app, host="0.0.0.0", port=API_PORT, log_level="info")
+
 async def main():
-    loop = asyncio.get_event_loop()
-    loop.create_task(
-        uvicorn.run(app, host="0.0.0.0", port=API_PORT, log_level="info")
-    )
+    # start FastAPI server in background thread
+    threading.Thread(target=start_fastapi, daemon=True).start()
+
+    # start telegram bot
     await bot.start()
     logger.info("🤖 Bot started.")
-    await idle()
-
-from pyrogram import idle
+    await idle()   # keeps bot alive
+    await bot.stop()
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
