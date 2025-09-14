@@ -55,8 +55,17 @@ routes = web.RouteTableDef()
 
 @routes.get("/", allow_head=True)
 async def root_route_handler(request):
-    """Handles the root endpoint for health checks."""
-    return web.json_response({"status": "running", "message": "Telegram File Bot is active."})
+    """Handles the root endpoint for health checks. Now checks bot connection status."""
+    if app.is_connected:
+        return web.json_response({
+            "status": "ok",
+            "message": "Web server is running and the bot is connected to Telegram."
+        })
+    else:
+        return web.json_response({
+            "status": "error",
+            "message": "Web server is running, but the bot has disconnected from Telegram."
+        }, status=503) # 503 Service Unavailable
         
 # --- Helper Functions ---
 def humanbytes(size):
@@ -320,17 +329,21 @@ async def main():
     if not os.path.exists('downloads'):
         os.makedirs('downloads')
         
-    runner = None  # Initialize runner to None to ensure it's always defined
+    runner = None
     try:
         web_app = web.Application(client_max_size=30000000)
         web_app.add_routes(routes)
         runner = web.AppRunner(web_app)
 
-        # Step 1: Start the Pyrogram client FIRST
+        # Step 1: Start and AUTHENTICATE the Pyrogram client FIRST
         await app.start()
-        logger.info("✅ BOT RUNNING: Pyrogram client connected successfully.")
+        logger.info("Bot client connected to Telegram.")
+        
+        # NEW: Verify authentication by fetching bot info. This will crash if keys are bad.
+        bot_info = await app.get_me()
+        logger.info(f"✅ BOT AUTHENTICATED: Logged in as {bot_info.first_name} (@{bot_info.username}).")
 
-        # Step 2: Start the web server ONLY after the bot is running
+        # Step 2: Start the web server ONLY after the bot is confirmed running
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", config.PORT)
         await site.start()
@@ -342,15 +355,13 @@ async def main():
     except (KeyboardInterrupt, SystemExit):
         logger.info("Shutdown signal received.")
     except Exception as e:
-        # Enhanced logging to show the full traceback for critical errors
-        logger.critical(f"A critical error occurred: {e}", exc_info=True)
+        logger.critical(f"A critical error occurred during startup: {e}", exc_info=True)
     finally:
         logger.info("Initiating graceful shutdown...")
         if app.is_initialized:
             await app.stop()
             logger.info("Pyrogram client stopped.")
         
-        # Now, we safely check if the runner was created before trying to clean it up
         if runner:
             await runner.cleanup()
             logger.info("Web server cleaned up.")
