@@ -8,6 +8,7 @@ from botocore.exceptions import NoCredentialsError, PartialCredentialsError, Cli
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import FloodWait
+from aiohttp import web
 
 from config import config
 
@@ -49,7 +50,30 @@ except Exception as e:
     logger.error(f"Failed to initialize Boto3 S3 client: {e}")
     exit(1)
 
+# --- Web Server for Health Checks ---
+routes = web.RouteTableDef()
 
+@routes.get("/", allow_head=True)
+async def root_route_handler(request):
+    """Handles the root endpoint for health checks."""
+    return web.json_response({"status": "running", "message": "Telegram File Bot is active."})
+
+async def web_server():
+    """Initializes and runs the aiohttp web server."""
+    web_app = web.Application(client_max_size=30000000)
+    web_app.add_routes(routes)
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    # Use the PORT from the environment, which is crucial for deployment platforms
+    site = web.TCPSite(runner, "0.0.0.0", config.PORT)
+    try:
+        await site.start()
+        logger.info(f"Web server started successfully on port {config.PORT}")
+    except Exception as e:
+        logger.error(f"Failed to start web server on port {config.PORT}: {e}")
+        # This error is critical, as the deployment platform will likely terminate the app
+        # A common cause is the port already being in use.
+        
 # --- Helper Functions ---
 def humanbytes(size):
     """Converts bytes to a human-readable format."""
@@ -240,7 +264,9 @@ async def upload_file_handler(client, message: Message):
                 progress=upload_progress_callback,
                 progress_args=(upload_status_msg, start_time_ch)
             )
-            channel_message_id = backup_message.message_id
+            # --- THIS IS THE FIX ---
+            # Pyrogram uses .id, not .message_id
+            channel_message_id = backup_message.id
             await upload_status_msg.delete()
         except Exception as e:
             await message.reply_text(f"⚠️ **Warning:** Could not back up file to channel.\n`{e}`")
@@ -319,15 +345,22 @@ async def main():
         os.makedirs('downloads')
         
     logger.info("Bot starting...")
+    
+    # Start the web server first
+    web_task = asyncio.create_task(web_server())
+    
+    # Start the Pyrogram client
     await app.start()
-    logger.info("Bot started successfully!")
-    # Keep the bot running
-    await asyncio.Event().wait()
+    
+    logger.info("Bot and web server started successfully!")
+    
+    # Wait for either the web server or the bot to stop
+    await asyncio.gather(web_task) # This will run indefinitely unless an error occurs in web_server
 
 
 if __name__ == "__main__":
     try:
-        app.run(main())
+        asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logger.info("Bot shutting down...")
     except Exception as e:
