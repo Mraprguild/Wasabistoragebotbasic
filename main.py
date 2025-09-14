@@ -9,7 +9,7 @@ from pyrogram import Client, filters, idle
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import FloodWait
 
-from config import config
+import config
 
 # --- Setup Logging ---
 logging.basicConfig(
