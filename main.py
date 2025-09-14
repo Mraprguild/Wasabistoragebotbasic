@@ -325,17 +325,17 @@ async def main():
     runner = web.AppRunner(web_app)
     
     try:
+        # Step 1: Start the Pyrogram client FIRST
         await app.start()
-        logger.info("Pyrogram client started successfully.")
-        
+        logger.info("✅ BOT RUNNING: Pyrogram client connected successfully.")
+
+        # Step 2: Start the web server ONLY after the bot is running
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", config.PORT)
         await site.start()
-        logger.info(f"Web server started successfully on port {config.PORT}.")
+        logger.info(f"✅ WEB SERVER RUNNING: Health check server started on port {config.PORT}.")
 
-        logger.info("Services started. Bot is now idle, listening for updates...")
-        # This will block until the bot is stopped by a signal (e.g., Ctrl+C)
-        # It allows both the bot and the web server to run concurrently.
+        logger.info("All services are running. Idling to listen for updates...")
         await idle()
 
     except (KeyboardInterrupt, SystemExit):
