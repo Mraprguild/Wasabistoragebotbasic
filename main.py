@@ -320,11 +320,12 @@ async def main():
     if not os.path.exists('downloads'):
         os.makedirs('downloads')
         
-    web_app = web.Application(client_max_size=30000000)
-    web_app.add_routes(routes)
-    runner = web.AppRunner(web_app)
-    
+    runner = None  # Initialize runner to None to ensure it's always defined
     try:
+        web_app = web.Application(client_max_size=30000000)
+        web_app.add_routes(routes)
+        runner = web.AppRunner(web_app)
+
         # Step 1: Start the Pyrogram client FIRST
         await app.start()
         logger.info("✅ BOT RUNNING: Pyrogram client connected successfully.")
@@ -341,14 +342,20 @@ async def main():
     except (KeyboardInterrupt, SystemExit):
         logger.info("Shutdown signal received.")
     except Exception as e:
-        logger.critical(f"A critical error occurred: {e}")
+        # Enhanced logging to show the full traceback for critical errors
+        logger.critical(f"A critical error occurred: {e}", exc_info=True)
     finally:
         logger.info("Initiating graceful shutdown...")
         if app.is_initialized:
             await app.stop()
             logger.info("Pyrogram client stopped.")
-        await runner.cleanup()
-        logger.info("Web server cleaned up. Shutdown complete.")
+        
+        # Now, we safely check if the runner was created before trying to clean it up
+        if runner:
+            await runner.cleanup()
+            logger.info("Web server cleaned up.")
+        
+        logger.info("Shutdown complete.")
 
 
 if __name__ == "__main__":
