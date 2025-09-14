@@ -341,27 +341,46 @@ async def list_files_command(client, message: Message):
     
 # --- Main Execution ---
 async def main():
+    """Initializes and runs the bot and web server, with graceful shutdown."""
     if not os.path.exists('downloads'):
         os.makedirs('downloads')
         
-    logger.info("Bot starting...")
+    # Setup aiohttp web server runner
+    web_app = web.Application(client_max_size=30000000)
+    web_app.add_routes(routes)
+    runner = web.AppRunner(web_app)
     
-    # Start the web server first
-    web_task = asyncio.create_task(web_server())
-    
-    # Start the Pyrogram client
-    await app.start()
-    
-    logger.info("Bot and web server started successfully!")
-    
-    # Wait for either the web server or the bot to stop
-    await asyncio.gather(web_task) # This will run indefinitely unless an error occurs in web_server
+    try:
+        # Start the web server
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", config.PORT)
+        await site.start()
+        logger.info(f"Web server started successfully on port {config.PORT}")
+
+        # Start the Pyrogram client
+        logger.info("Bot starting...")
+        await app.start()
+        logger.info("Bot started successfully!")
+
+        # Keep the main task alive indefinitely
+        await asyncio.Future()
+
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Shutdown signal received.")
+    except Exception as e:
+        logger.critical(f"Bot stopped due to a critical error: {e}")
+    finally:
+        logger.info("Initiating graceful shutdown...")
+        # Stop the Pyrogram client if it's running
+        if app.is_initialized:
+            await app.stop()
+            logger.info("Pyrogram client stopped.")
+        # Clean up the web server
+        await runner.cleanup()
+        logger.info("Web server cleaned up. Shutdown complete.")
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot shutting down...")
-    except Exception as e:
-        logger.critical(f"Bot stopped due to a critical error: {e}")
+    # asyncio.run handles the event loop lifecycle.
+    # The main() function now contains all the logic for startup and shutdown.
+    asyncio.run(main())
