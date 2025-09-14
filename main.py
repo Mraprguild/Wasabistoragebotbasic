@@ -5,7 +5,7 @@ import logging
 import boto3
 from botocore.client import Config as BotoConfig
 from botocore.exceptions import NoCredentialsError, PartialCredentialsError, ClientError
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import FloodWait
 from aiohttp import web
@@ -57,22 +57,6 @@ routes = web.RouteTableDef()
 async def root_route_handler(request):
     """Handles the root endpoint for health checks."""
     return web.json_response({"status": "running", "message": "Telegram File Bot is active."})
-
-async def web_server():
-    """Initializes and runs the aiohttp web server."""
-    web_app = web.Application(client_max_size=30000000)
-    web_app.add_routes(routes)
-    runner = web.AppRunner(web_app)
-    await runner.setup()
-    # Use the PORT from the environment, which is crucial for deployment platforms
-    site = web.TCPSite(runner, "0.0.0.0", config.PORT)
-    try:
-        await site.start()
-        logger.info(f"Web server started successfully on port {config.PORT}")
-    except Exception as e:
-        logger.error(f"Failed to start web server on port {config.PORT}: {e}")
-        # This error is critical, as the deployment platform will likely terminate the app
-        # A common cause is the port already being in use.
         
 # --- Helper Functions ---
 def humanbytes(size):
@@ -112,7 +96,7 @@ async def upload_progress_callback(current, total, message: Message, start_time)
     except FloodWait as e:
         await asyncio.sleep(e.x)
     except Exception:
-        pass # Ignore other edit errors during fast uploads
+        pass
 
 async def download_progress_callback(current, total, message: Message, start_time):
     """Monitors and displays download progress."""
@@ -207,7 +191,6 @@ async def upload_file_handler(client, message: Message):
     file_id = media.file_unique_id
     file_path = f"downloads/{file_id}_{file_name}"
     
-    # Check if file is already uploaded
     if file_id in config.FILE_DATABASE:
         file_info = config.FILE_DATABASE[file_id]
         await message.reply_text(
@@ -217,7 +200,6 @@ async def upload_file_handler(client, message: Message):
         )
         return
 
-    # --- Download from Telegram ---
     download_status_msg = await message.reply_text("Starting download from Telegram...")
     start_time = time.time()
     try:
@@ -236,7 +218,6 @@ async def upload_file_handler(client, message: Message):
         
     await download_status_msg.edit_text("Download complete. Now uploading to Wasabi...")
 
-    # --- Upload to Wasabi ---
     try:
         s3.upload_file(file_path, config.WASABI_BUCKET, file_name)
         wasabi_url = s3.generate_presigned_url(
@@ -251,7 +232,6 @@ async def upload_file_handler(client, message: Message):
             os.remove(file_path)
         return
 
-    # --- Backup to Storage Channel ---
     channel_message_id = None
     if config.STORAGE_CHANNEL_ID:
         try:
@@ -264,15 +244,12 @@ async def upload_file_handler(client, message: Message):
                 progress=upload_progress_callback,
                 progress_args=(upload_status_msg, start_time_ch)
             )
-            # --- THIS IS THE FIX ---
-            # Pyrogram uses .id, not .message_id
             channel_message_id = backup_message.id
             await upload_status_msg.delete()
         except Exception as e:
             await message.reply_text(f"⚠️ **Warning:** Could not back up file to channel.\n`{e}`")
             logger.warning(f"Failed to backup {file_name} to channel: {e}")
             
-    # --- Finalize and Cleanup ---
     config.FILE_DATABASE[file_id] = {
         'file_name': file_name,
         'wasabi_url': wasabi_url,
@@ -311,7 +288,6 @@ async def get_link_callback(client, callback_query: CallbackQuery):
     file_id = callback_query.data.split("_")[1]
     if file_id in config.FILE_DATABASE:
         file_info = config.FILE_DATABASE[file_id]
-        # Generate a fresh presigned URL
         new_url = s3.generate_presigned_url(
             'get_object',
             Params={'Bucket': config.WASABI_BUCKET, 'Key': file_info['file_name']},
@@ -326,7 +302,6 @@ async def get_link_callback(client, callback_query: CallbackQuery):
     else:
         await callback_query.answer("Sorry, file not found in database.", show_alert=True)
         
-# --- Placeholder for other commands ---
 @app.on_message(filters.command("list"))
 async def list_files_command(client, message: Message):
     if not config.FILE_DATABASE:
@@ -345,42 +320,39 @@ async def main():
     if not os.path.exists('downloads'):
         os.makedirs('downloads')
         
-    # Setup aiohttp web server runner
     web_app = web.Application(client_max_size=30000000)
     web_app.add_routes(routes)
     runner = web.AppRunner(web_app)
     
     try:
-        # Start the web server
+        await app.start()
+        logger.info("Pyrogram client started successfully.")
+        
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", config.PORT)
         await site.start()
-        logger.info(f"Web server started successfully on port {config.PORT}")
+        logger.info(f"Web server started successfully on port {config.PORT}.")
 
-        # Start the Pyrogram client
-        logger.info("Bot starting...")
-        await app.start()
-        logger.info("Bot started successfully!")
-
-        # Keep the main task alive indefinitely
-        await asyncio.Future()
+        logger.info("Services started. Bot is now idle, listening for updates...")
+        # This will block until the bot is stopped by a signal (e.g., Ctrl+C)
+        # It allows both the bot and the web server to run concurrently.
+        await idle()
 
     except (KeyboardInterrupt, SystemExit):
         logger.info("Shutdown signal received.")
     except Exception as e:
-        logger.critical(f"Bot stopped due to a critical error: {e}")
+        logger.critical(f"A critical error occurred: {e}")
     finally:
         logger.info("Initiating graceful shutdown...")
-        # Stop the Pyrogram client if it's running
         if app.is_initialized:
             await app.stop()
             logger.info("Pyrogram client stopped.")
-        # Clean up the web server
         await runner.cleanup()
         logger.info("Web server cleaned up. Shutdown complete.")
 
 
 if __name__ == "__main__":
-    # asyncio.run handles the event loop lifecycle.
-    # The main() function now contains all the logic for startup and shutdown.
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Application has been shut down.")
