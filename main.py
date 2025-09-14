@@ -8,7 +8,6 @@ from botocore.exceptions import NoCredentialsError, PartialCredentialsError, Cli
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import FloodWait
-from aiohttp import web
 
 from config import config
 
@@ -50,23 +49,6 @@ except Exception as e:
     logger.error(f"Failed to initialize Boto3 S3 client: {e}")
     exit(1)
 
-# --- Web Server for Health Checks ---
-routes = web.RouteTableDef()
-
-@routes.get("/", allow_head=True)
-async def root_route_handler(request):
-    """Handles the root endpoint for health checks. Now checks bot connection status."""
-    if app.is_connected:
-        return web.json_response({
-            "status": "ok",
-            "message": "Web server is running and the bot is connected to Telegram."
-        })
-    else:
-        return web.json_response({
-            "status": "error",
-            "message": "Web server is running, but the bot has disconnected from Telegram."
-        }, status=503) # 503 Service Unavailable
-        
 # --- Helper Functions ---
 def humanbytes(size):
     """Converts bytes to a human-readable format."""
@@ -325,31 +307,20 @@ async def list_files_command(client, message: Message):
     
 # --- Main Execution ---
 async def main():
-    """Initializes and runs the bot and web server, with graceful shutdown."""
+    """Initializes and runs the bot with graceful shutdown."""
     if not os.path.exists('downloads'):
         os.makedirs('downloads')
         
-    runner = None
     try:
-        web_app = web.Application(client_max_size=30000000)
-        web_app.add_routes(routes)
-        runner = web.AppRunner(web_app)
-
-        # Step 1: Start and AUTHENTICATE the Pyrogram client FIRST
+        # Start and AUTHENTICATE the Pyrogram client
         await app.start()
         logger.info("Bot client connected to Telegram.")
         
-        # NEW: Verify authentication by fetching bot info. This will crash if keys are bad.
+        # Verify authentication by fetching bot info. This will crash if keys are bad.
         bot_info = await app.get_me()
         logger.info(f"✅ BOT AUTHENTICATED: Logged in as {bot_info.first_name} (@{bot_info.username}).")
 
-        # Step 2: Start the web server ONLY after the bot is confirmed running
-        await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", config.PORT)
-        await site.start()
-        logger.info(f"✅ WEB SERVER RUNNING: Health check server started on port {config.PORT}.")
-
-        logger.info("All services are running. Idling to listen for updates...")
+        logger.info("Bot is running. Idling to listen for updates...")
         await idle()
 
     except (KeyboardInterrupt, SystemExit):
@@ -361,10 +332,6 @@ async def main():
         if app.is_initialized:
             await app.stop()
             logger.info("Pyrogram client stopped.")
-        
-        if runner:
-            await runner.cleanup()
-            logger.info("Web server cleaned up.")
         
         logger.info("Shutdown complete.")
 
