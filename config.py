@@ -9,7 +9,7 @@ BOT_TOKEN = "your_bot_token"
 WASABI_ACCESS_KEY = "your_wasabi_access_key"
 WASABI_SECRET_KEY = "your_wasabi_secret_key"
 WASABI_BUCKET = "your-bucket-name"
-WASABI_REGION = "us-east-1" # e.g., us-east-1, eu-central-1
+WASABI_REGION = "ap-northeast-1" # e.g., us-east-1, eu-central-1
 WASABI_ENDPOINT_URL = "https://s3.wasabisys.com" # Or your region-specific endpoint
 
 # --- Optional Backup Channel ---
