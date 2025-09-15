@@ -6,6 +6,8 @@ import asyncio
 from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import Message
+from pyrogram.enums import ParseMode
+from pyrogram.utils import escape_markdown
 from botocore.exceptions import NoCredentialsError, ClientError
 from pyrogram.errors import FloodWait
 from boto3.s3.transfer import TransferConfig
@@ -28,11 +30,9 @@ if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, W
     exit()
 
 # --- Initialize Pyrogram Client ---
-# Increased workers for better performance with multiple concurrent tasks.
 app = Client("wasabi_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=20)
 
 # --- Boto3 Transfer Configuration for TURBO SPEED ---
-# This enables multipart transfers and uses multiple threads for significant speed boosts.
 transfer_config = TransferConfig(
     multipart_threshold=25 * 1024 * 1024,  # Start multipart for files > 25MB
     max_concurrency=20,                     # Use up to 20 parallel threads
@@ -57,7 +57,7 @@ def humanbytes(size):
     power = 1024
     t_n = 0
     power_dict = {0: " B", 1: " KB", 2: " MB", 3: " GB", 4: " TB"}
-    while size >= power and t_n < len(power_dict) -1:
+    while size >= power and t_n < len(power_dict) - 1:
         size /= power
         t_n += 1
     return "{:.2f}".format(size) + power_dict[t_n]
@@ -75,27 +75,27 @@ async def progress_reporter(message: Message, status: dict, total_size: int, tas
         progress_bar = "[{0}{1}]".format('█' * int(percentage / 10), ' ' * (10 - int(percentage / 10)))
         
         text = (
-            f"**{task}...**\n"
+            f"**{escape_markdown(task, version=2)}...**\n"
             f"{progress_bar} {percentage:.2f}%\n"
-            f"**Done:** {humanbytes(status['seen'])} of {humanbytes(total_size)}\n"
-            f"**Speed:** {humanbytes(speed)}/s\n"
-            f"**ETA:** {eta}"
+            f"**Done:** {escape_markdown(humanbytes(status['seen']), version=2)} of {escape_markdown(humanbytes(total_size), version=2)}\n"
+            f"**Speed:** {escape_markdown(humanbytes(speed), version=2)}/s\n"
+            f"**ETA:** {escape_markdown(eta, version=2)}"
         )
         try:
-            await message.edit_text(text)
+            await message.edit_text(text, parse_mode=ParseMode.MARKDOWN_V2)
         except FloodWait as e:
             await asyncio.sleep(e.x)
         except Exception:
-            pass # Ignore other edit errors
-        await asyncio.sleep(3) # Update every 3 seconds
+            pass
+        await asyncio.sleep(3)
 
 def pyrogram_progress_callback(current, total, message, start_time, task):
     """Progress callback for Pyrogram's synchronous operations."""
     try:
         if not hasattr(pyrogram_progress_callback, 'last_edit_time') or time.time() - pyrogram_progress_callback.last_edit_time > 3:
             percentage = min((current * 100 / total), 100) if total > 0 else 0
-            text = f"**{task}...** {percentage:.2f}%"
-            message.edit_text(text)
+            text = f"**{escape_markdown(task, version=2)}...** {percentage:.2f}%"
+            message.edit_text(text, parse_mode=ParseMode.MARKDOWN_V2)
             pyrogram_progress_callback.last_edit_time = time.time()
     except Exception:
         pass
@@ -135,7 +135,7 @@ async def upload_file_handler(client, message: Message):
             status['seen'] += bytes_amount
 
         reporter_task = asyncio.create_task(
-            progress_reporter(status_message, status, media.file_size, f"Uploading `{file_name}` (Turbo)", time.time())
+            progress_reporter(status_message, status, media.file_size, f"Uploading {file_name} (Turbo)", time.time())
         )
         
         await asyncio.to_thread(
@@ -144,22 +144,30 @@ async def upload_file_handler(client, message: Message):
             WASABI_BUCKET,
             file_name,
             Callback=boto_callback,
-            Config=transfer_config  # <-- TURBO SPEED ENABLED
+            Config=transfer_config
         )
         
         status['running'] = False
         reporter_task.cancel()
 
-        presigned_url = s3_client.generate_presigned_url('get_object', Params={'Bucket': WASABI_BUCKET, 'Key': file_name}, ExpiresIn=86400) # 24 hours
+        presigned_url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': WASABI_BUCKET, 'Key': file_name},
+            ExpiresIn=86400
+        )
         
+        safe_file_name = escape_markdown(file_name, version=2)
+        safe_url = escape_markdown(presigned_url, version=2)
+
         await status_message.edit_text(
             f"✅ **Upload Successful!**\n\n"
-            f"**File:** `{file_name}`\n"
-            f"**Streamable Link (24h expiry):**\n`{presigned_url}`"
+            f"**File:** `{safe_file_name}`\n"
+            f"**Streamable Link (24h expiry):**\n`{safe_url}`",
+            parse_mode=ParseMode.MARKDOWN_V2
         )
 
     except Exception as e:
-        await status_message.edit_text(f"❌ An error occurred: {str(e)}")
+        await status_message.edit_text(f"❌ An error occurred: {escape_markdown(str(e), version=2)}", parse_mode=ParseMode.MARKDOWN_V2)
     finally:
         if file_path and os.path.exists(file_path):
             os.remove(file_path)
@@ -175,7 +183,7 @@ async def download_file_handler(client, message: Message):
     local_file_path = f"./downloads/{file_name}"
     os.makedirs("./downloads", exist_ok=True)
     
-    status_message = await message.reply_text(f"Searching for `{file_name}`...", quote=True)
+    status_message = await message.reply_text(f"Searching for `{escape_markdown(file_name, version=2)}`...", quote=True, parse_mode=ParseMode.MARKDOWN_V2)
 
     try:
         meta = await asyncio.to_thread(s3_client.head_object, Bucket=WASABI_BUCKET, Key=file_name)
@@ -186,7 +194,7 @@ async def download_file_handler(client, message: Message):
             status['seen'] += bytes_amount
             
         reporter_task = asyncio.create_task(
-            progress_reporter(status_message, status, total_size, f"Downloading `{file_name}` (Turbo)", time.time())
+            progress_reporter(status_message, status, total_size, f"Downloading {file_name} (Turbo)", time.time())
         )
         
         await asyncio.to_thread(
@@ -195,7 +203,7 @@ async def download_file_handler(client, message: Message):
             file_name,
             local_file_path,
             Callback=boto_callback,
-            Config=transfer_config  # <-- TURBO SPEED ENABLED
+            Config=transfer_config
         )
         
         status['running'] = False
@@ -213,11 +221,11 @@ async def download_file_handler(client, message: Message):
 
     except ClientError as e:
         if e.response['Error']['Code'] == '404':
-            await status_message.edit_text(f"❌ **Error:** File not found in Wasabi: `{file_name}`")
+            await status_message.edit_text(f"❌ **Error:** File not found in Wasabi: `{escape_markdown(file_name, version=2)}`", parse_mode=ParseMode.MARKDOWN_V2)
         else:
-            await status_message.edit_text(f"❌ **S3 Client Error:** {e}")
+            await status_message.edit_text(f"❌ **S3 Client Error:** {escape_markdown(str(e), version=2)}", parse_mode=ParseMode.MARKDOWN_V2)
     except Exception as e:
-        await status_message.edit_text(f"❌ **An unexpected error occurred:** {str(e)}")
+        await status_message.edit_text(f"❌ **An unexpected error occurred:** {escape_markdown(str(e), version=2)}", parse_mode=ParseMode.MARKDOWN_V2)
     finally:
         if os.path.exists(local_file_path):
             os.remove(local_file_path)
@@ -227,3 +235,4 @@ if __name__ == "__main__":
     print("Bot is starting with TURBO-SPEED settings...")
     app.run()
     print("Bot has stopped.")
+        
