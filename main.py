@@ -163,7 +163,7 @@ def start_web():
 # --- Entry ---
 if __name__ == "__main__":
     # Start webserver in background
-    threading.Thread(target=start_web, daemon=true).start()
+    threading.Thread(target=start_web, daemon=True).start()
     # Run bot (polling mode)
     app.run()
     
