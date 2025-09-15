@@ -48,8 +48,8 @@ app = Client("wasabi_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN
 # This enables multipart transfers and uses multiple threads for significant speed boosts.
 transfer_config = TransferConfig(
     multipart_threshold=8 * 1024 * 1024,   # Start multipart for files > 8MB
-    max_concurrency=50,                   # 🚀 Increase parallel threads
-    multipart_chunksize=16 * 1024 * 1024, # Larger chunks for fewer requests
+    max_concurrency=16,                   # 🚀 Increase parallel threads
+    multipart_chunksize=32 * 1024 * 1024, # Larger chunks for fewer requests
     use_threads=True
 )
 
@@ -65,7 +65,7 @@ s3_client = boto3.client(
 
 # --- Rate limiting ---
 user_limits = {}
-MAX_REQUESTS_PER_MINUTE = 5
+MAX_REQUESTS_PER_MINUTE = 3
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
 
 # --- Authorization Check ---
