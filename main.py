@@ -31,12 +31,12 @@ if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, W
 # Increased workers for better performance with multiple concurrent tasks.
 app = Client("wasabi_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=20)
 
-# --- Boto3 Transfer Configuration for TURBO SPEED ---
-# This enables multipart transfers and uses multiple threads for significant speed boosts.
+# --- Boto3 Transfer Configuration for EXTREME SPEED ---
+# This enables multipart transfers and uses more threads/larger chunks for maximum speed.
 transfer_config = TransferConfig(
     multipart_threshold=25 * 1024 * 1024,  # Start multipart for files > 25MB
-    max_concurrency=20,                     # Use up to 20 parallel threads
-    multipart_chunksize=8 * 1024 * 1024,    # 8MB chunks
+    max_concurrency=40,                     # Use up to 40 parallel threads for extreme speed
+    multipart_chunksize=16 * 1024 * 1024,   # 16MB chunks for faster throughput
     use_threads=True
 )
 
@@ -106,12 +106,45 @@ def pyrogram_progress_callback(current, total, message, start_time, task):
 async def start_command(client, message: Message):
     """Handles the /start command."""
     await message.reply_text(
-        "Hello! I am a **Turbo-Speed** Wasabi storage bot.\n\n"
-        "I use parallel processing to make transfers incredibly fast.\n\n"
+        "Hello! I am an **Extreme-Speed** Wasabi storage bot.\n\n"
+        "I use aggressive parallel processing to make transfers incredibly fast.\n\n"
         "➡️ **To upload:** Just send me any file.\n"
-        "⬅️ **To download:** Use `/download <file_name>`.\n\n"
+        "⬅️ **To download:** Use `/download <file_name>`.\n"
+        "📂 **To list files:** Use `/list`.\n\n"
         "Generated links are direct streamable links compatible with players like VLC & MX Player."
     )
+
+@app.on_message(filters.command("list"))
+async def list_files_handler(client, message: Message):
+    """Handles the /list command to show files in the Wasabi bucket."""
+    status_message = await message.reply_text("🔎 Fetching file list from Wasabi...", quote=True)
+    try:
+        response = await asyncio.to_thread(
+            s3_client.list_objects_v2, Bucket=WASABI_BUCKET
+        )
+        
+        if 'Contents' in response:
+            files = response['Contents']
+            # Sort files by last modified date, newest first
+            sorted_files = sorted(files, key=lambda x: x['LastModified'], reverse=True)
+            
+            file_list_text = "**Files in your Wasabi Bucket:**\n\n"
+            for file in sorted_files:
+                file_line = f"📄 `{file['Key']}` ({humanbytes(file['Size'])})\n"
+                if len(file_list_text) + len(file_line) > 4096:
+                    file_list_text += "\n...and more. List truncated."
+                    break
+                file_list_text += file_line
+            
+            await status_message.edit_text(file_list_text)
+        else:
+            await status_message.edit_text("✅ Your Wasabi bucket is empty.")
+
+    except ClientError as e:
+        await status_message.edit_text(f"❌ **S3 Client Error:** Could not list files. Check bucket name and permissions. Details: {e}")
+    except Exception as e:
+        await status_message.edit_text(f"❌ **An unexpected error occurred:** {str(e)}")
+
 
 @app.on_message(filters.document | filters.video | filters.audio | filters.photo)
 async def upload_file_handler(client, message: Message):
@@ -135,7 +168,7 @@ async def upload_file_handler(client, message: Message):
             status['seen'] += bytes_amount
 
         reporter_task = asyncio.create_task(
-            progress_reporter(status_message, status, media.file_size, f"Uploading `{file_name}` (Turbo)", time.time())
+            progress_reporter(status_message, status, media.file_size, f"Uploading `{file_name}` (Extreme Speed)", time.time())
         )
         
         await asyncio.to_thread(
@@ -186,7 +219,7 @@ async def download_file_handler(client, message: Message):
             status['seen'] += bytes_amount
             
         reporter_task = asyncio.create_task(
-            progress_reporter(status_message, status, total_size, f"Downloading `{file_name}` (Turbo)", time.time())
+            progress_reporter(status_message, status, total_size, f"Downloading `{file_name}` (Extreme Speed)", time.time())
         )
         
         await asyncio.to_thread(
@@ -224,6 +257,6 @@ async def download_file_handler(client, message: Message):
 
 # --- Main Execution ---
 if __name__ == "__main__":
-    print("Bot is starting with TURBO-SPEED settings...")
+    print("Bot is starting with EXTREME-SPEED settings...")
     app.run()
     print("Bot has stopped.")
