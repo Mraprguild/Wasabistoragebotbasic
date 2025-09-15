@@ -218,10 +218,10 @@ async def start_command(client, message: Message):
                 "⬅️ Use <code>/download filename</code> to download\n"
                 "📋 Use <code>/list</code> to list files\n\n"
                 "<b>Speed Mode:</b> EXTREME 🚀",
-                "📞 <b>Contact:</b>\n"
-               "• Telegram: <a href='https://t.me/Sathishkumar'>@Sathishkumar</a>\n"
-               "• Email: <a href='mailto:Mraprguild@gmail.com'>Mraprguild@gmail.com</a>\n\n"
-               "👑 <b>Bot Owner:</b> Mraprguild"
+                "<b>Contact:</b>\n"
+               "Telegram: <a href='https://t.me/Sathishkumar'>@Sathishkumar</a>\n"
+               "Email: <a href='mailto:Mraprguild@gmail.com'>Mraprguild@gmail.com</a>\n\n"
+               "<b>Bot Owner:</b> Mraprguild"
         parse_mode=ParseMode.HTML
     )
 
