@@ -32,7 +32,7 @@ WASABI_BUCKET = os.getenv("WASABI_BUCKET")
 WASABI_REGION = os.getenv("WASABI_REGION")
 
 # Welcome image URL (you can replace this with your own image)
-WELCOME_IMAGE_URL = "https://raw.githubusercontent.com/Mraprguild8133/Telegramstorage-/refs/heads/main/welcome.jpg"
+WELCOME_IMAGE_URL = "https://img.freepik.com/free-vector/cloud-storage-upload-abstract-concept-illustration_335657-2103.jpg"
 
 # --- Basic Checks ---
 if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET, WASABI_REGION]):
@@ -169,7 +169,7 @@ async def check_rate_limit(user_id):
     # Remove requests older than 1 minute
     user_limits[user_id] = [t for t in user_limits[user_id] if current_time - t < 60]
     
-    if len(user_limits[user_id]) >= MAX_REQUESTS_PER_MINUTE:
+    if len(user_limits[user_id]) >= MAX_REQUESments_PER_MINUTE:
         return False
     
     user_limits[user_id].append(current_time)
@@ -240,15 +240,22 @@ def pyrogram_progress_callback(current, total, message, start_time, task):
 @app.on_message(filters.command("start"))
 async def start_command(client, message: Message):
     """Handles the /start command."""
+    # Get username or first name if username doesn't exist
+    username = message.from_user.username
+    user_mention = f"@{username}" if username else message.from_user.first_name
+    
     # Send the welcome image with caption
     await message.reply_photo(
         photo=WELCOME_IMAGE_URL,
-        caption="Hello! I am a <b>Turbo-Speed</b> Wasabi storage bot.\n\n"
+        caption=f"{user_mention} Hello! I am a Turbo-Speed Cloud storage bot.\n\n"
                 "I use parallel processing to make transfers incredibly fast.\n\n"
                 "➡️ <b>To upload:</b> Just send me any file.\n"
                 "⬅️ <b>To download:</b> Use <code>/download &lt;file_name&gt;</code>\n"
                 "📋 <b>To list files:</b> Use <code>/list</code>\n\n"
-                "Generated links are direct streamable links compatible with players like VLC & MX Player.",
+                "Generated links are direct streamable links compatible with players like VLC & MX Player.\n\n"
+                "<b>Owner:</b> Mraprguild\n"
+                "<b>Telegram:</b> @Sathishkumar33\n"
+                "<b>Email:</b> Mraprguild@gmail.com",
         parse_mode=ParseMode.HTML
     )
 
@@ -310,7 +317,7 @@ async def upload_file_handler(client, message: Message):
             f"✅ <b>Upload Successful!</b>\n\n"
             f"<b>File:</b> <code>{safe_file_name}</code>\n"
             f"<b>Streamable Link (24h expiry):</b>\n<code>{safe_url}</code>",
-            parse_mode=ParseMode.MARKDOWM
+            parse_mode=ParseMode.HTML
         )
 
     except Exception as e:
@@ -414,7 +421,7 @@ async def list_files(client, message: Message):
         
         files = [obj['Key'] for obj in response['Contents']]
         safe_files = [escape_html(file) for file in files[:20]]  # Show first 20 files
-        files_list = "\n".join([f"• <code>{file}</code>" for file in safe_files])
+        files_list = "\n".join([f"• <code>{file</code>" for file in safe_files])
         
         if len(files) > 20:
             files_list += f"\n\n...and {len(files) - 20} more files"
