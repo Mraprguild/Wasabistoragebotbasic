@@ -224,7 +224,7 @@ def pyrogram_progress_callback(current, total, message, start_time, task):
             
             text = f"**{escaped_task}** {percentage:.2f}%"
             try:
-                message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
+                message.edit_text(text, parse_mode=ParseMode.Markdown)
             except:
                 # If markdown fails, try without formatting
                 message.edit_text(f"{task} {percentage:.2f}%")
