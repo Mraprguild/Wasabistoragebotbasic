@@ -41,7 +41,7 @@ transfer_config = TransferConfig(
 )
 
 # --- Initialize Boto3 Client for Wasabi ---
-wasabi_endpoint_url = f'httpss3.{WASABI_REGION}.wasabisys.com'
+wasabi_endpoint_url = f'https://s3.{WASABI_REGION}.wasabisys.com'
 s3_client = boto3.client(
     's3',
     endpoint_url=wasabi_endpoint_url,
