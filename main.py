@@ -8,6 +8,7 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 from botocore.exceptions import NoCredentialsError, ClientError
 from pyrogram.errors import FloodWait
+from boto3.s3.transfer import TransferConfig
 
 # Load environment variables from .env file
 load_dotenv()
@@ -30,9 +31,17 @@ if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, W
 # Increased workers for better performance with multiple concurrent tasks.
 app = Client("wasabi_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=20)
 
+# --- Boto3 Transfer Configuration for TURBO SPEED ---
+# This enables multipart transfers and uses multiple threads for significant speed boosts.
+transfer_config = TransferConfig(
+    multipart_threshold=25 * 1024 * 1024,  # Start multipart for files > 25MB
+    max_concurrency=20,                     # Use up to 20 parallel threads
+    multipart_chunksize=8 * 1024 * 1024,    # 8MB chunks
+    use_threads=True
+)
+
 # --- Initialize Boto3 Client for Wasabi ---
-# This is a synchronous client, but we will use it in a non-blocking way.
-wasabi_endpoint_url = f'https://s3.{WASABI_REGION}.wasabisys.com'
+wasabi_endpoint_url = f'httpss3.{WASABI_REGION}.wasabisys.com'
 s3_client = boto3.client(
     's3',
     endpoint_url=wasabi_endpoint_url,
@@ -82,12 +91,9 @@ async def progress_reporter(message: Message, status: dict, total_size: int, tas
 
 def pyrogram_progress_callback(current, total, message, start_time, task):
     """Progress callback for Pyrogram's synchronous operations."""
-    # This is a synchronous wrapper for the async logic, used for Pyrogram's download
-    # In a real-world high-concurrency bot, this would also be made fully async.
     try:
-        # A simple synchronous edit is okay here as Pyrogram handles its own loop.
         if not hasattr(pyrogram_progress_callback, 'last_edit_time') or time.time() - pyrogram_progress_callback.last_edit_time > 3:
-            percentage = min((current * 100 / total), 100)
+            percentage = min((current * 100 / total), 100) if total > 0 else 0
             text = f"**{task}...** {percentage:.2f}%"
             message.edit_text(text)
             pyrogram_progress_callback.last_edit_time = time.time()
@@ -100,15 +106,16 @@ def pyrogram_progress_callback(current, total, message, start_time, task):
 async def start_command(client, message: Message):
     """Handles the /start command."""
     await message.reply_text(
-        "Hello! I am a high-speed Wasabi storage bot.\n\n"
-        "➡️ **To upload:** Just send me any file. I can handle files up to Telegram's limit (2GB for standard users, 4GB for Premium).\n"
+        "Hello! I am a **Turbo-Speed** Wasabi storage bot.\n\n"
+        "I use parallel processing to make transfers incredibly fast.\n\n"
+        "➡️ **To upload:** Just send me any file.\n"
         "⬅️ **To download:** Use `/download <file_name>`.\n\n"
         "Generated links are direct streamable links compatible with players like VLC & MX Player."
     )
 
 @app.on_message(filters.document | filters.video | filters.audio | filters.photo)
 async def upload_file_handler(client, message: Message):
-    """Handles file uploads to Wasabi in a non-blocking way."""
+    """Handles file uploads to Wasabi using multipart transfers."""
     media = message.document or message.video or message.audio or message.photo
     if not media:
         await message.reply_text("Unsupported file type.")
@@ -118,11 +125,9 @@ async def upload_file_handler(client, message: Message):
     status_message = await message.reply_text("Processing your request...", quote=True)
 
     try:
-        # Step 1: Download from Telegram (this is a blocking call in Pyrogram but very fast on servers)
         await status_message.edit_text("Downloading from Telegram...")
         file_path = await message.download(progress=pyrogram_progress_callback, progress_args=(status_message, time.time(), "Downloading"))
         
-        # Step 2: Upload to Wasabi non-blockingly
         file_name = os.path.basename(file_path)
         status = {'running': True, 'seen': 0}
         
@@ -130,7 +135,7 @@ async def upload_file_handler(client, message: Message):
             status['seen'] += bytes_amount
 
         reporter_task = asyncio.create_task(
-            progress_reporter(status_message, status, media.file_size, f"Uploading `{file_name}`", time.time())
+            progress_reporter(status_message, status, media.file_size, f"Uploading `{file_name}` (Turbo)", time.time())
         )
         
         await asyncio.to_thread(
@@ -138,20 +143,19 @@ async def upload_file_handler(client, message: Message):
             file_path,
             WASABI_BUCKET,
             file_name,
-            Callback=boto_callback
+            Callback=boto_callback,
+            Config=transfer_config  # <-- TURBO SPEED ENABLED
         )
         
         status['running'] = False
         reporter_task.cancel()
 
-        # Step 3: Generate link and send success message
         presigned_url = s3_client.generate_presigned_url('get_object', Params={'Bucket': WASABI_BUCKET, 'Key': file_name}, ExpiresIn=86400) # 24 hours
         
         await status_message.edit_text(
             f"✅ **Upload Successful!**\n\n"
             f"**File:** `{file_name}`\n"
-            f"**Streamable Link (24h expiry):**\n`{presigned_url}`\n\n"
-            f"This link works with VLC, MX Player, and other media players."
+            f"**Streamable Link (24h expiry):**\n`{presigned_url}`"
         )
 
     except Exception as e:
@@ -162,7 +166,7 @@ async def upload_file_handler(client, message: Message):
 
 @app.on_message(filters.command("download"))
 async def download_file_handler(client, message: Message):
-    """Handles file downloads from Wasabi in a non-blocking way."""
+    """Handles file downloads from Wasabi using multipart transfers."""
     if len(message.command) < 2:
         await message.reply_text("Usage: `/download <file_name_in_wasabi>`")
         return
@@ -171,28 +175,32 @@ async def download_file_handler(client, message: Message):
     local_file_path = f"./downloads/{file_name}"
     os.makedirs("./downloads", exist_ok=True)
     
-    status_message = await message.reply_text(f"Searching for `{file_name}` in Wasabi...", quote=True)
+    status_message = await message.reply_text(f"Searching for `{file_name}`...", quote=True)
 
     try:
-        # Step 1: Get file metadata from Wasabi
         meta = await asyncio.to_thread(s3_client.head_object, Bucket=WASABI_BUCKET, Key=file_name)
         total_size = int(meta.get('ContentLength', 0))
 
-        # Step 2: Download from Wasabi non-blockingly
         status = {'running': True, 'seen': 0}
         def boto_callback(bytes_amount):
             status['seen'] += bytes_amount
             
         reporter_task = asyncio.create_task(
-            progress_reporter(status_message, status, total_size, f"Downloading `{file_name}`", time.time())
+            progress_reporter(status_message, status, total_size, f"Downloading `{file_name}` (Turbo)", time.time())
         )
         
-        await asyncio.to_thread(s3_client.download_file, WASABI_BUCKET, file_name, local_file_path, Callback=boto_callback)
+        await asyncio.to_thread(
+            s3_client.download_file,
+            WASABI_BUCKET,
+            file_name,
+            local_file_path,
+            Callback=boto_callback,
+            Config=transfer_config  # <-- TURBO SPEED ENABLED
+        )
         
         status['running'] = False
         reporter_task.cancel()
         
-        # Step 3: Upload to Telegram
         await status_message.edit_text("Uploading to Telegram...")
         await client.send_document(
             chat_id=message.chat.id,
@@ -216,6 +224,6 @@ async def download_file_handler(client, message: Message):
 
 # --- Main Execution ---
 if __name__ == "__main__":
-    print("Bot is starting with high-performance settings...")
+    print("Bot is starting with TURBO-SPEED settings...")
     app.run()
     print("Bot has stopped.")
