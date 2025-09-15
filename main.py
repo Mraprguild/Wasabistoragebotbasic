@@ -31,6 +31,9 @@ WASABI_SECRET_KEY = os.getenv("WASABI_SECRET_KEY")
 WASABI_BUCKET = os.getenv("WASABI_BUCKET")
 WASABI_REGION = os.getenv("WASABI_REGION")
 
+# Welcome image URL (you can replace this with your own image)
+WELCOME_IMAGE_URL = "https://raw.githubusercontent.com/Mraprguild8133/Telegramstorage-/refs/heads/main/welcome.jpg"
+
 # --- Basic Checks ---
 if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET, WASABI_REGION]):
     print("Missing one or more required environment variables. Please check your .env file.")
@@ -237,13 +240,15 @@ def pyrogram_progress_callback(current, total, message, start_time, task):
 @app.on_message(filters.command("start"))
 async def start_command(client, message: Message):
     """Handles the /start command."""
-    await message.reply_text(
-        "Hello! I am a <b>Turbo-Speed</b> Wasabi storage bot.\n\n"
-        "I use parallel processing to make transfers incredibly fast.\n\n"
-        "➡️ <b>To upload:</b> Just send me any file.\n"
-        "⬅️ <b>To download:</b> Use <code>/download &lt;file_name&gt;</code>\n"
-        "📋 <b>To list files:</b> Use <code>/list</code>\n\n"
-        "Generated links are direct streamable links compatible with players like VLC & MX Player.",
+    # Send the welcome image with caption
+    await message.reply_photo(
+        photo=WELCOME_IMAGE_URL,
+        caption="Hello! I am a <b>Turbo-Speed</b> Wasabi storage bot.\n\n"
+                "I use parallel processing to make transfers incredibly fast.\n\n"
+                "➡️ <b>To upload:</b> Just send me any file.\n"
+                "⬅️ <b>To download:</b> Use <code>/download &lt;file_name&gt;</code>\n"
+                "📋 <b>To list files:</b> Use <code>/list</code>\n\n"
+                "Generated links are direct streamable links compatible with players like VLC & MX Player.",
         parse_mode=ParseMode.HTML
     )
 
@@ -305,7 +310,7 @@ async def upload_file_handler(client, message: Message):
             f"✅ <b>Upload Successful!</b>\n\n"
             f"<b>File:</b> <code>{safe_file_name}</code>\n"
             f"<b>Streamable Link (24h expiry):</b>\n<code>{safe_url}</code>",
-            parse_mode=ParseMode.HTML
+            parse_mode=ParseMode.MARKDOWM
         )
 
     except Exception as e:
