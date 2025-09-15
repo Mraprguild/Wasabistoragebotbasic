@@ -21,6 +21,7 @@ WASABI_ACCESS_KEY = os.getenv("WASABI_ACCESS_KEY")
 WASABI_SECRET_KEY = os.getenv("WASABI_SECRET_KEY")
 WASABI_BUCKET = os.getenv("WASABI_BUCKET")
 WASABI_REGION = os.getenv("WASABI_REGION")
+PORT = int(os.environ.get("PORT", 8080))  # Render provides PORT environment variable
 
 # --- Basic Checks ---
 if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET, WASABI_REGION]):
@@ -28,15 +29,21 @@ if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, W
     exit()
 
 # --- Initialize Pyrogram Client ---
-# Increased workers for better performance with multiple concurrent tasks.
-app = Client("wasabi_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=20)
+# Added in_memory=True and adjusted for Render compatibility
+app = Client(
+    "wasabi_bot", 
+    api_id=API_ID, 
+    api_hash=API_HASH, 
+    bot_token=BOT_TOKEN, 
+    workers=20,
+    in_memory=True  # Recommended for server environments
+)
 
 # --- Boto3 Transfer Configuration for EXTREME SPEED ---
-# This enables multipart transfers and uses more threads/larger chunks for maximum speed.
 transfer_config = TransferConfig(
-    multipart_threshold=25 * 1024 * 1024,  # Start multipart for files > 25MB
-    max_concurrency=40,                     # Use up to 40 parallel threads for extreme speed
-    multipart_chunksize=16 * 1024 * 1024,   # 16MB chunks for faster throughput
+    multipart_threshold=25 * 1024 * 1024,
+    max_concurrency=40,
+    multipart_chunksize=16 * 1024 * 1024,
     use_threads=True
 )
 
@@ -100,7 +107,6 @@ def pyrogram_progress_callback(current, total, message, start_time, task):
     except Exception:
         pass
 
-
 # --- Bot Handlers ---
 @app.on_message(filters.command("start"))
 async def start_command(client, message: Message):
@@ -145,7 +151,6 @@ async def list_files_handler(client, message: Message):
     except Exception as e:
         await status_message.edit_text(f"❌ **An unexpected error occurred:** {str(e)}")
 
-
 @app.on_message(filters.document | filters.video | filters.audio | filters.photo)
 async def upload_file_handler(client, message: Message):
     """Handles file uploads to Wasabi using multipart transfers."""
@@ -177,13 +182,13 @@ async def upload_file_handler(client, message: Message):
             WASABI_BUCKET,
             file_name,
             Callback=boto_callback,
-            Config=transfer_config  # <-- TURBO SPEED ENABLED
+            Config=transfer_config
         )
         
         status['running'] = False
         reporter_task.cancel()
 
-        presigned_url = s3_client.generate_presigned_url('get_object', Params={'Bucket': WASABI_BUCKET, 'Key': file_name}, ExpiresIn=86400) # 24 hours
+        presigned_url = s3_client.generate_presigned_url('get_object', Params={'Bucket': WASABI_BUCKET, 'Key': file_name}, ExpiresIn=86400)
         
         await status_message.edit_text(
             f"✅ **Upload Successful!**\n\n"
@@ -228,7 +233,7 @@ async def download_file_handler(client, message: Message):
             file_name,
             local_file_path,
             Callback=boto_callback,
-            Config=transfer_config  # <-- TURBO SPEED ENABLED
+            Config=transfer_config
         )
         
         status['running'] = False
@@ -255,8 +260,30 @@ async def download_file_handler(client, message: Message):
         if os.path.exists(local_file_path):
             os.remove(local_file_path)
 
-# --- Main Execution ---
+# --- Health Check Endpoint for Render ---
+from aiohttp import web
+
+async def health_check(request):
+    return web.Response(text="OK")
+
+# --- Main Execution with Render Support ---
 if __name__ == "__main__":
     print("Bot is starting with EXTREME-SPEED settings...")
+    
+    # Start a simple web server for health checks (required by Render)
+    async def start_web_server():
+        app_web = web.Application()
+        app_web.router.add_get('/health', health_check)
+        runner = web.AppRunner(app_web)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', PORT)
+        await site.start()
+        print(f"Health check server started on port {PORT}")
+    
+    # Start both the Telegram bot and the health check server
+    loop = asyncio.get_event_loop()
+    loop.create_task(start_web_server())
+    
+    # Run the Pyrogram client
     app.run()
     print("Bot has stopped.")
