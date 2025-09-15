@@ -263,10 +263,17 @@ async def start_command(client, message: Message):
                 "➡️ <b>To upload:</b> Just send me any file.\n"
                 "⬅️ <b>To download:</b> Use <code>/download &lt;file_name&gt;</code>\n"
                 "📋 <b>To list files:</b> Use <code>/list</code>\n\n"
-                "<b>Owner:</b> Mraprguild\n"
-                "<b>Telegram:</b> @Sathishkumar33\n"
-                "<b>Email:</b> mraprguild@gmail.com\n\n"
-                "Generated links are direct streamable links compatible with players like VLC & MX Player.",
+                "<b>Performance Features:</b>\n"
+        "Multi-threaded parallel processing\n"
+        "4GB file size support\n"
+        "Adaptive retry system\n"
+        "Real-time speed monitoring\n"
+        "Connection pooling\n"
+        "Memory optimization\n\n"
+        "<b>Owner:</b> Mraprguild\n"
+        "<b>Email:</b> mraprguild@gmail.com"
+        "<b>Telegram:</b> @Sathishkumar33",
+        
         parse_mode=ParseMode.HTML
     )
 
