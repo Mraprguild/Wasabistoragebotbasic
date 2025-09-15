@@ -53,7 +53,6 @@ transfer_config = TransferConfig(
     use_threads=True
 )
 
-
 # --- Initialize Boto3 Client for Wasabi ---
 wasabi_endpoint_url = f'https://s3.{WASABI_REGION}.wasabisys.com'
 s3_client = boto3.client(
@@ -185,46 +184,92 @@ def get_user_folder(user_id):
     """Get user-specific folder path"""
     return f"user_{user_id}"
 
-async def progress_reporter(message: Message, status: dict, total_size: int, task: str, start_time: float):
-    """Asynchronously reports progress of a background task."""
-    while status['running']:
-        percentage = (status['seen'] / total_size) * 100 if total_size > 0 else 0
-        percentage = min(percentage, 100)
+def create_progress_bar(percentage, length=12):
+    """Create a visual progress bar with emoji indicators"""
+    filled_length = int(length * percentage / 100)
+    bar = "█" * filled_length + "░" * (length - filled_length)
+    
+    # Add indicator based on progress
+    if percentage < 25:
+        indicator = "🟦"
+    elif percentage < 50:
+        indicator = "🟩"
+    elif percentage < 75:
+        indicator = "🟨"
+    else:
+        indicator = "🟥" if percentage < 100 else "✅"
+    
+    return f"{indicator} {bar}"
 
-        elapsed_time = time.time() - start_time
+async def progress_reporter(message: Message, status: dict, total_size: int, task: str, start_time: float):
+    """Enhanced progress reporter with beautiful visual design"""
+    last_update = 0
+    max_updates = 100  # Limit updates to prevent flooding
+    
+    while status['running']:
+        current_time = time.time()
+        elapsed_time = current_time - start_time
+        
+        # Calculate progress
+        if total_size > 0:
+            percentage = min((status['seen'] / total_size) * 100, 100)
+        else:
+            percentage = 0
+        
+        # Calculate speed and ETA
         speed = status['seen'] / elapsed_time if elapsed_time > 0 else 0
-        eta = time.strftime("%Hh %Mm %Ss", time.gmtime((total_size - status['seen']) / speed)) if speed > 0 else "N/A"
+        remaining = total_size - status['seen']
+        eta_seconds = remaining / speed if speed > 0 else 0
         
-        progress_bar = "[{0}{1}]".format('█' * int(percentage / 10), ' ' * (10 - int(percentage / 10)))
+        # Format ETA
+        if eta_seconds > 3600:
+            eta = f"{eta_seconds/3600:.1f}h"
+        elif eta_seconds > 60:
+            eta = f"{eta_seconds/60:.1f}m"
+        else:
+            eta = f"{eta_seconds:.0f}s"
         
-        # Use HTML formatting instead of markdown
-        escaped_task = escape_html(task)
+        # Create the progress bar
+        progress_bar = create_progress_bar(percentage)
         
-        text = (
-            f"<b>{escaped_task}</b>\n"
-            f"{progress_bar} {percentage:.2f}%\n"
-            f"<b>Done:</b> {humanbytes(status['seen'])} of {humanbytes(total_size)}\n"
-            f"<b>Speed:</b> {humanbytes(speed)}/s\n"
-            f"<b>ETA:</b> {eta}"
-        )
-        try:
-            await message.edit_text(text, parse_mode=ParseMode.HTML)
-        except FloodWait as e:
-            await asyncio.sleep(e.value)
-        except Exception:
-            # If HTML fails, try without formatting
+        # Only update if significant change or every 3 seconds
+        if current_time - last_update > 3 or abs(percentage - status.get('last_percentage', 0)) > 5:
+            status['last_percentage'] = percentage
+            
+            # Use HTML formatting
+            escaped_task = escape_html(task)
+            
+            text = (
+                f"<b>📤 {escaped_task}</b>\n\n"
+                f"{progress_bar} <b>{percentage:.2f}%</b>\n\n"
+                f"<b>📊 Progress:</b> {humanbytes(status['seen'])} / {humanbytes(total_size)}\n"
+                f"<b>🚀 Speed:</b> {humanbytes(speed)}/s\n"
+                f"<b>⏱️ ETA:</b> {eta}\n"
+                f"<b>🕒 Elapsed:</b> {time.strftime('%H:%M:%S', time.gmtime(elapsed_time))}"
+            )
+            
             try:
-                plain_text = (
-                    f"{task}\n"
-                    f"{progress_bar} {percentage:.2f}%\n"
-                    f"Done: {humanbytes(status['seen'])} of {humanbytes(total_size)}\n"
-                    f"Speed: {humanbytes(speed)}/s\n"
-                    f"ETA: {eta}"
-                )
-                await message.edit_text(plain_text)
-            except:
-                pass  # Ignore other edit errors
-        await asyncio.sleep(3)  # Update every 3 seconds
+                await message.edit_text(text, parse_mode=ParseMode.HTML)
+                last_update = current_time
+            except FloodWait as e:
+                await asyncio.sleep(e.value)
+            except Exception:
+                # If HTML fails, try without formatting
+                try:
+                    plain_text = (
+                        f"{task}\n\n"
+                        f"{progress_bar} {percentage:.2f}%\n\n"
+                        f"Progress: {humanbytes(status['seen'])} / {humanbytes(total_size)}\n"
+                        f"Speed: {humanbytes(speed)}/s\n"
+                        f"ETA: {eta}\n"
+                        f"Elapsed: {time.strftime('%H:%M:%S', time.gmtime(elapsed_time))}"
+                    )
+                    await message.edit_text(plain_text)
+                    last_update = current_time
+                except:
+                    pass  # Ignore other edit errors
+        
+        await asyncio.sleep(1)  # Update every second
 
 def pyrogram_progress_callback(current, total, message, start_time, task):
     """Progress callback for Pyrogram's synchronous operations."""
@@ -232,19 +277,23 @@ def pyrogram_progress_callback(current, total, message, start_time, task):
         if not hasattr(pyrogram_progress_callback, 'last_edit_time') or time.time() - pyrogram_progress_callback.last_edit_time > 3:
             percentage = min((current * 100 / total), 100) if total > 0 else 0
             
+            # Create a simple progress bar
+            bar_length = 10
+            filled = int(bar_length * percentage / 100)
+            bar = "█" * filled + "░" * (bar_length - filled)
+            
             # Use HTML formatting instead of markdown
             escaped_task = escape_html(task)
             
-            text = f"<b>{escaped_task}</b> {percentage:.2f}%"
+            text = f"<b>⬇️ {escaped_task}</b>\n{bar} {percentage:.2f}%"
             try:
                 message.edit_text(text, parse_mode=ParseMode.HTML)
             except:
                 # If HTML fails, try without formatting
-                message.edit_text(f"{task} {percentage:.2f}%")
+                message.edit_text(f"{task}\n{bar} {percentage:.2f}%")
             pyrogram_progress_callback.last_edit_time = time.time()
     except Exception:
         pass
-
 
 # --- Bot Handlers ---
 @app.on_message(filters.command("start"))
@@ -301,10 +350,10 @@ async def upload_file_handler(client, message: Message):
         return
 
     file_path = None
-    status_message = await message.reply_text("Processing your request...", quote=True)
+    status_message = await message.reply_text("🔄 Processing your request...", quote=True)
 
     try:
-        await status_message.edit_text("Downloading from Telegram...")
+        await status_message.edit_text("⬇️ Downloading from Telegram...")
         file_path = await message.download(progress=pyrogram_progress_callback, progress_args=(status_message, time.time(), "Downloading"))
         
         file_name = f"{get_user_folder(message.from_user.id)}/{sanitize_filename(os.path.basename(file_path))}"
@@ -338,8 +387,9 @@ async def upload_file_handler(client, message: Message):
         
         await status_message.edit_text(
             f"✅ <b>Upload Successful!</b>\n\n"
-            f"<b>File:</b> <code>{safe_file_name}</code>\n"
-            f"<b>Streamable Link (24h expiry):</b>\n<code>{safe_url}</code>",
+            f"<b>📁 File:</b> <code>{safe_file_name}</code>\n"
+            f"<b>📦 Size:</b> {humanbytes(media.file_size)}\n"
+            f"<b>🔗 Streamable Link (24h expiry):</b>\n<code>{safe_url}</code>",
             parse_mode=ParseMode.HTML
         )
 
@@ -373,7 +423,7 @@ async def download_file_handler(client, message: Message):
     local_file_path = f"./downloads/{file_name}"
     os.makedirs("./downloads", exist_ok=True)
     
-    status_message = await message.reply_text(f"Searching for <code>{safe_file_name}</code>...", quote=True, parse_mode=ParseMode.HTML)
+    status_message = await message.reply_text(f"🔍 Searching for <code>{safe_file_name}</code>...", quote=True, parse_mode=ParseMode.HTML)
 
     try:
         meta = await asyncio.to_thread(s3_client.head_object, Bucket=WASABI_BUCKET, Key=user_file_name)
@@ -405,10 +455,11 @@ async def download_file_handler(client, message: Message):
         await asyncio.sleep(0.1)  # Give the reporter task a moment to finish
         reporter_task.cancel()
         
-        await status_message.edit_text("Uploading to Telegram...")
+        await status_message.edit_text("📤 Uploading to Telegram...")
         await message.reply_document(
             document=local_file_path,
-            caption=f"✅ <b>Download Complete:</b> <code>{safe_file_name}</code>",
+            caption=f"✅ <b>Download Complete:</b> <code>{safe_file_name}</code>\n"
+                    f"📦 <b>Size:</b> {humanbytes(total_size)}",
             parse_mode=ParseMode.HTML,
             progress=pyrogram_progress_callback,
             progress_args=(status_message, time.time(), "Uploading to Telegram")
@@ -452,22 +503,22 @@ async def list_files(client, message: Message):
         response = await asyncio.to_thread(s3_client.list_objects_v2, Bucket=WASABI_BUCKET, Prefix=user_prefix)
         
         if 'Contents' not in response:
-            await message.reply_text("No files found in your storage.")
+            await message.reply_text("📂 No files found in your storage.")
             return
         
         # Remove the user prefix from displayed filenames
         files = [obj['Key'].replace(user_prefix, "") for obj in response['Contents']]
         safe_files = [escape_html(file) for file in files[:20]]  # Show first 20 files
-        files_list = "\n".join([f"• <code>{file}</code>" for file in safe_files])
+        files_list = "\n".join([f"â€¢ <code>{file}</code>" for file in safe_files])
         
         if len(files) > 20:
             files_list += f"\n\n...and {len(files) - 20} more files"
         
-        await message.reply_text(f"<b>Your files:</b>\n\n{files_list}", parse_mode=ParseMode.HTML)
+        await message.reply_text(f"ðŸ“ <b>Your files:</b>\n\n{files_list}", parse_mode=ParseMode.HTML)
     
     except Exception as e:
         error_msg = escape_html(str(e))
-        await message.reply_text(f"❌ Error listing files: {error_msg}")
+        await message.reply_text(f"âŒ Error listing files: {error_msg}")
 
 # --- Main Execution ---
 if __name__ == "__main__":
