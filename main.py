@@ -197,7 +197,7 @@ async def progress_reporter(message: Message, status: dict, total_size: int, tas
         try:
             await message.edit_text(text, parse_mode=ParseMode.HTML)
         except FloodWait as e:
-            await asyncio.sleep(e.x)
+            await asyncio.sleep(e.value)
         except Exception:
             # If HTML fails, try without formatting
             try:
@@ -428,6 +428,23 @@ if __name__ == "__main__":
     http_thread = threading.Thread(target=run_http_server, daemon=True)
     http_thread.start()
     
-    # Start the Pyrogram bot
-    app.run()
+    # Start the Pyrogram bot with FloodWait handling
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            print("Starting bot...")
+            app.run()
+            break
+        except FloodWait as e:
+            retry_count += 1
+            wait_time = e.value + 5
+            print(f"Telegram flood wait error: Need to wait {e.value} seconds")
+            print(f"Waiting {wait_time} seconds before retry {retry_count}/{max_retries}...")
+            time.sleep(wait_time)
+        except Exception as e:
+            print(f"Unexpected error: {e}")
+            break
+    
     print("Bot has stopped.")
