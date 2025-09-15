@@ -26,7 +26,7 @@ WASABI_ACCESS_KEY = os.getenv("WASABI_ACCESS_KEY")
 WASABI_SECRET_KEY = os.getenv("WASABI_SECRET_KEY")
 WASABI_BUCKET = os.getenv("WASABI_BUCKET")
 WASABI_REGION = os.getenv("WASABI_REGION")
-PORT = int(os.environ.get("PORT")
+PORT = int(os.environ.get("PORT", 8080))
 
 # --- Constants ---
 FILES_PER_PAGE = 10
