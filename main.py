@@ -31,6 +31,9 @@ WASABI_SECRET_KEY = os.getenv("WASABI_SECRET_KEY")
 WASABI_BUCKET = os.getenv("WASABI_BUCKET")
 WASABI_REGION = os.getenv("WASABI_REGION")
 
+# Welcome image URL (you can replace this with your own image)
+WELCOME_IMAGE_URL = "https://raw.githubusercontent.com/Mraprguild8133/Telegramstorage-/refs/heads/main/IMG-20250915-WA0013.jpg"
+
 # --- Basic Checks ---
 if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET, WASABI_REGION]):
     print("Missing one or more required environment variables. Please check your .env file.")
@@ -43,9 +46,9 @@ app = Client("wasabi_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN
 # --- Boto3 Transfer Configuration for TURBO SPEED ---
 # This enables multipart transfers and uses multiple threads for significant speed boosts.
 transfer_config = TransferConfig(
-    multipart_threshold=25 * 1024 * 1024,  # Start multipart for files > 25MB
+    multipart_threshold=30 * 1024 * 1024,  # Start multipart for files > 25MB
     max_concurrency=20,                     # Use up to 20 parallel threads
-    multipart_chunksize=8 * 1024 * 1024,    # 8MB chunks
+    multipart_chunksize=20 * 1024 * 1024,    # 8MB chunks
     use_threads=True
 )
 
@@ -237,15 +240,18 @@ def pyrogram_progress_callback(current, total, message, start_time, task):
 @app.on_message(filters.command("start"))
 async def start_command(client, message: Message):
     """Handles the /start command."""
-    await message.reply_text(
-        "Hello! I am a <b>Turbo-Speed</b> Wasabi storage bot.\n\n"
-        "I use parallel processing to make transfers incredibly fast.\n\n"
-        "➡️ <b>To upload:</b> Just send me any file.\n"
-        "⬅️ <b>To download:</b> Use <code>/download &lt;file_name&gt;</code>\n"
-        "📋 <b>To list files:</b> Use <code>/list</code>\n\n"
-        "✉️Email <b>mraprguild@gmail.com</b> Mraprguild.\n\n"
-        "✅Telegram <b>Sathishkumar33</b> Telegram Accounts.\n\n"
-        "Generated links are direct streamable links compatible with players like VLC & MX Player.",
+    # Send the welcome image with caption
+    await message.reply_photo(
+        photo=WELCOME_IMAGE_URL,
+        caption="Hello! I am a <b>Turbo-Speed</b> Cloud storage bot.\n\n"
+                "I use parallel processing to make transfers incredibly fast.\n\n"
+                "➡️ <b>To upload:</b> Just send me any file.\n"
+                "⬅️ <b>To download:</b> Use <code>/download &lt;file_name&gt;</code>\n"
+                "📋 <b>To list files:</b> Use <code>/list</code>\n\n"
+                "<b>Owner:</b> Mraprguild\n"
+                "<b>Telegram:</b> @Sathishkumar33\n"
+                "<b>Email:</b> mraprguild@gmail.com",
+                "Generated links are direct streamable links compatible with players like VLC & MX Player.",
         parse_mode=ParseMode.HTML
     )
 
