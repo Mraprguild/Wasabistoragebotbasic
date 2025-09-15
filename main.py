@@ -65,8 +65,8 @@ s3_client = boto3.client(
 
 # --- Rate limiting ---
 user_limits = {}
-MAX_REQUESTS_PER_MINUTE = 3
-MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
+MAX_REQUESTS_PER_MINUTE = 15
+MAX_FILE_SIZE = 4 * 1024 * 1024 * 1024  # 4GB
 
 # --- Authorization Check ---
 async def is_authorized(user_id):
