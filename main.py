@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
 Telegram File Bot + Wasabi Storage
-- Upload up to 5GB files
-- Extreme speed (parallel chunk transfers)
-- Direct streamable links (VLC/MX)
-- Render compatible (port 5000 web server)
-- Bot runs in POLLING mode
+- Polling mode
+- Web server on port 5000 (Render healthcheck)
+- Extreme speed upload/download
 """
 
 import os
@@ -17,8 +15,8 @@ import threading
 from urllib.parse import quote
 
 import boto3
-from botocore.exceptions import ClientError
 from boto3.s3.transfer import TransferConfig
+from botocore.exceptions import ClientError
 
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -28,7 +26,7 @@ from dotenv import load_dotenv
 # --- Load .env ---
 load_dotenv()
 
-API_ID = int(os.getenv("API_ID"))
+API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
@@ -41,23 +39,23 @@ WASABI_ENDPOINT_URL = f"https://s3.{WASABI_REGION}.wasabisys.com"
 # --- Logging ---
 logging.basicConfig(level=logging.INFO)
 
+# --- Sanity Check ---
+if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET]):
+    raise SystemExit("❌ Missing required environment variables!")
+
 # --- Boto3 client ---
 s3_client = boto3.client(
     "s3",
     endpoint_url=WASABI_ENDPOINT_URL,
     aws_access_key_id=WASABI_ACCESS_KEY,
     aws_secret_access_key=WASABI_SECRET_KEY,
-    config=boto3.session.Config(
-        retries={"max_attempts": 10, "mode": "adaptive"},
-        max_pool_connections=64,
-    ),
 )
 
 # --- TransferConfig for high speed ---
 transfer_config = TransferConfig(
     multipart_threshold=8 * 1024 * 1024,
     multipart_chunksize=8 * 1024 * 1024,
-    max_concurrency=64,
+    max_concurrency=32,
     use_threads=True,
 )
 
@@ -80,7 +78,7 @@ async def progress_callback(current, total, message: Message, start, action):
             f"⚡ {math.ceil(speed/1024/1024)} MB/s\n"
             f"⏳ {math.ceil(eta)}s left"
         )
-    except:
+    except Exception:
         pass
 
 # --- Upload handler ---
@@ -162,8 +160,9 @@ def start_web():
 
 # --- Entry ---
 if __name__ == "__main__":
-    # Start webserver in background
+    # Start webserver in a separate thread
     threading.Thread(target=start_web, daemon=True).start()
-    # Run bot (polling mode)
+    # Run bot in polling mode
+    print("🚀 Starting bot in polling mode + webserver on port 5000...")
     app.run()
     
