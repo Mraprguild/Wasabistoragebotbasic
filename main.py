@@ -9,7 +9,6 @@ from pyrogram.types import Message
 from botocore.exceptions import NoCredentialsError, ClientError
 from pyrogram.errors import FloodWait
 from boto3.s3.transfer import TransferConfig
-from aiohttp import web
 
 # Load environment variables from .env file
 load_dotenv()
@@ -18,7 +17,6 @@ load_dotenv()
 API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-SESSION_STRING = os.getenv("SESSION_STRING")  # NEW: optional persistent session
 WASABI_ACCESS_KEY = os.getenv("WASABI_ACCESS_KEY")
 WASABI_SECRET_KEY = os.getenv("WASABI_SECRET_KEY")
 WASABI_BUCKET = os.getenv("WASABI_BUCKET")
@@ -31,24 +29,15 @@ if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, W
     exit()
 
 # --- Initialize Pyrogram Client ---
-if SESSION_STRING:
-    # Use pre-generated session string (recommended for Render)
-    app = Client(
-        session_name=SESSION_STRING,
-        api_id=API_ID,
-        api_hash=API_HASH,
-        bot_token=BOT_TOKEN,
-        workers=20
-    )
-else:
-    # Fallback: will create a local .session file (OK if filesystem is persistent)
-    app = Client(
-        "wasabi_bot",
-        api_id=API_ID,
-        api_hash=API_HASH,
-        bot_token=BOT_TOKEN,
-        workers=20
-    )
+# Added in_memory=True and adjusted for Render compatibility
+app = Client(
+    "wasabi_bot", 
+    api_id=API_ID, 
+    api_hash=API_HASH, 
+    bot_token=BOT_TOKEN, 
+    workers=20,
+    in_memory=True  # Recommended for server environments
+)
 
 # --- Boto3 Transfer Configuration for EXTREME SPEED ---
 transfer_config = TransferConfig(
@@ -272,6 +261,8 @@ async def download_file_handler(client, message: Message):
             os.remove(local_file_path)
 
 # --- Health Check Endpoint for Render ---
+from aiohttp import web
+
 async def health_check(request):
     return web.Response(text="OK")
 
@@ -296,4 +287,3 @@ if __name__ == "__main__":
     # Run the Pyrogram client
     app.run()
     print("Bot has stopped.")
-        
