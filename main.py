@@ -8,15 +8,12 @@ import tempfile
 import traceback
 import boto3
 import asyncio
-import psutil
-from datetime import datetime
 from dotenv import load_dotenv
-from pyrogram import Client, filters, __version__ as pyrogram_version
-from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram import Client, filters
+from pyrogram.types import Message
 from botocore.exceptions import NoCredentialsError, ClientError
 from pyrogram.errors import FloodWait
 from boto3.s3.transfer import TransferConfig
-from aiohttp import web
 
 # Load environment variables from .env file
 load_dotenv()
@@ -29,18 +26,21 @@ WASABI_ACCESS_KEY = os.getenv("WASABI_ACCESS_KEY")
 WASABI_SECRET_KEY = os.getenv("WASABI_SECRET_KEY")
 WASABI_BUCKET = os.getenv("WASABI_BUCKET")
 WASABI_REGION = os.getenv("WASABI_REGION")
-PORT = int(os.environ.get("PORT", 5000))  # Render uses port 5000
 
 # --- Basic Checks ---
 if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET, WASABI_REGION]):
     print("Missing one or more required environment variables. Please check your .env file.")
     exit(1)
 
-# --- Bot Startup Time ---
-BOT_START_TIME = time.time()
-
-# --- Initialize Pyrogram Client ---
-app = Client("wasabi_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=20)
+# --- Initialize Pyrogram Client with port 5000 ---
+app = Client(
+    "wasabi_bot", 
+    api_id=API_ID, 
+    api_hash=API_HASH, 
+    bot_token=BOT_TOKEN, 
+    workers=20,
+    port=5000  # Added port 5000 configuration
+)
 
 # --- Boto3 Transfer Configuration for TURBO SPEED ---
 transfer_config = TransferConfig(
@@ -58,69 +58,6 @@ s3_client = boto3.client(
     aws_access_key_id=WASABI_ACCESS_KEY,
     aws_secret_access_key=WASABI_SECRET_KEY
 )
-
-# --- Templates ---
-TEMPLATES = {
-    "start": (
-        "🚀 **Turbo-Speed Wasabi Storage Bot**\n\n"
-        "I use parallel processing to make transfers blazing fast!\n\n"
-        "➡️ **To upload:** Just send me any file\n"
-        "⬅️ **To download:** Use `/download <file_name>`\n"
-        "📊 **Check status:** Use `/status`\n\n"
-        "Generated links are direct streamable links compatible with players like VLC & MX Player."
-    ),
-    "upload_success": (
-        "✅ **Upload Successful!**\n\n"
-        "**File:** `{file_name}`\n"
-        "**Size:** {file_size}\n"
-        "**Streamable Link (24h expiry):**\n`{presigned_url}`"
-    ),
-    "error": "❌ **Error:** {error}",
-    "processing": "⏳ Processing your request...",
-    "downloading": "📥 Downloading from Telegram...",
-    "uploading": "📤 Uploading to Wasabi...",
-    "searching": "🔍 Searching for `{file_name}`...",
-    "file_not_found": "❌ **Error:** File not found in Wasabi: `{file_name}`",
-    "status": (
-        "🤖 **Bot Status**\n\n"
-        "**Uptime:** {uptime}\n"
-        "**CPU Usage:** {cpu_usage}%\n"
-        "**Memory Usage:** {memory_usage}\n"
-        "**Python Version:** {python_version}\n"
-        "**Pyrogram Version:** {pyrogram_version}\n\n"
-        "**Wasabi Connection:** {wasabi_status}\n"
-        "**Telegram Connection:** {telegram_status}\n\n"
-        "**Total Files Processed:** {files_processed}\n"
-        "**Total Data Transferred:** {data_transferred}"
-    )
-}
-
-# --- Bot Statistics ---
-class BotStats:
-    def __init__(self):
-        self.files_processed = 0
-        self.data_transferred = 0
-        self.start_time = time.time()
-    
-    def add_file(self, size):
-        self.files_processed += 1
-        self.data_transferred += size
-    
-    def get_uptime(self):
-        uptime_seconds = int(time.time() - self.start_time)
-        days, remainder = divmod(uptime_seconds, 86400)
-        hours, remainder = divmod(remainder, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        
-        if days > 0:
-            return f"{days}d {hours}h {minutes}m"
-        elif hours > 0:
-            return f"{hours}h {minutes}m {seconds}s"
-        else:
-            return f"{minutes}m {seconds}s"
-
-# Initialize bot statistics
-bot_stats = BotStats()
 
 # --- Utilities ---
 def humanbytes(size):
@@ -197,24 +134,6 @@ def pyrogram_progress_callback(current, total, message, start_time, task):
     except Exception:
         pass
 
-# --- Connection Status Checkers ---
-async def check_wasabi_connection():
-    """Check if we can connect to Wasabi"""
-    try:
-        await asyncio.to_thread(s3_client.head_bucket, Bucket=WASABI_BUCKET)
-        return "✅ Connected"
-    except Exception as e:
-        return f"❌ Error: {str(e)}"
-
-async def check_telegram_connection():
-    """Check if we're connected to Telegram"""
-    try:
-        # Simple check - if we can get our own bot info
-        me = await app.get_me()
-        return f"✅ Connected as @{me.username}"
-    except Exception as e:
-        return f"❌ Error: {str(e)}"
-
 # --- Hybrid helpers (memory vs temp-file) ---
 # Bytes threshold for in-memory streaming (200 MB)
 IN_MEMORY_THRESHOLD = 200 * 1024 * 1024
@@ -226,110 +145,13 @@ def use_memory_stream(size):
 @app.on_message(filters.command("start"))
 async def start_command(client, message: Message):
     """Handles the /start command."""
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Status", callback_data="status"),
-        InlineKeyboardButton("❓ Help", callback_data="help")]
-    ])
-    
     await message.reply_text(
-        TEMPLATES["start"],
-        reply_markup=keyboard
+        "Hello! I am a **Turbo-Speed** Wasabi storage bot.\n\n"
+        "I use parallel processing to make transfers fast.\n\n"
+        "➡️ **To upload:** Just send me any file.\n"
+        "⬅️ **To download:** Use `/download <file_name>`.\n\n"
+        "Generated links are direct streamable links compatible with players like VLC & MX Player."
     )
-
-@app.on_message(filters.command("status"))
-async def status_command(client, message: Message):
-    """Handles the /status command."""
-    # Get system stats
-    cpu_usage = psutil.cpu_percent()
-    memory_usage = humanbytes(psutil.virtual_memory().used)
-    
-    # Check connection status
-    wasabi_status = await check_wasabi_connection()
-    telegram_status = await check_telegram_connection()
-    
-    status_message = TEMPLATES["status"].format(
-        uptime=bot_stats.get_uptime(),
-        cpu_usage=cpu_usage,
-        memory_usage=memory_usage,
-        python_version=os.sys.version.split()[0],
-        pyrogram_version=pyrogram_version,
-        wasabi_status=wasabi_status,
-        telegram_status=telegram_status,
-        files_processed=bot_stats.files_processed,
-        data_transferred=humanbytes(bot_stats.data_transferred)
-    )
-    
-    await message.reply_text(status_message)
-
-@app.on_message(filters.command("help"))
-async def help_command(client, message: Message):
-    """Handles the /help command."""
-    help_text = (
-        "🤖 **Wasabi Storage Bot Help**\n\n"
-        "**Commands:**\n"
-        "• /start - Start the bot\n"
-        "• /status - Check bot status and connections\n"
-        "• /help - Show this help message\n"
-        "• /download <filename> - Download a file from Wasabi\n\n"
-        "**Usage:**\n"
-        "• Just send any file to upload it to Wasabi\n"
-        "• Use /download with the filename to retrieve files\n\n"
-        "**Features:**\n"
-        "• Turbo-speed transfers with parallel processing\n"
-        "• Streamable links for media files\n"
-        "• Progress tracking for all operations\n"
-        "• Connection status monitoring"
-    )
-    await message.reply_text(help_text)
-
-@app.on_callback_query()
-async def callback_handler(client, callback_query):
-    """Handle inline button callbacks"""
-    data = callback_query.data
-    
-    if data == "status":
-        # Get system stats
-        cpu_usage = psutil.cpu_percent()
-        memory_usage = humanbytes(psutil.virtual_memory().used)
-        
-        # Check connection status
-        wasabi_status = await check_wasabi_connection()
-        telegram_status = await check_telegram_connection()
-        
-        status_message = TEMPLATES["status"].format(
-            uptime=bot_stats.get_uptime(),
-            cpu_usage=cpu_usage,
-            memory_usage=memory_usage,
-            python_version=os.sys.version.split()[0],
-            pyrogram_version=pyrogram_version,
-            wasabi_status=wasabi_status,
-            telegram_status=telegram_status,
-            files_processed=bot_stats.files_processed,
-            data_transferred=humanbytes(bot_stats.data_transferred)
-        )
-        
-        await callback_query.message.edit_text(status_message)
-    
-    elif data == "help":
-        help_text = (
-            "🤖 **Wasabi Storage Bot Help**\n\n"
-            "**Commands:**\n"
-            "• /start - Start the bot\n"
-            "• /status - Check bot status and connections\n"
-            "• /help - Show this help message\n"
-            "• /download <filename> - Download a file from Wasabi\n\n"
-            "**Usage:**\n"
-            "• Just send any file to upload it to Wasabi\n"
-            "• Use /download with the filename to retrieve files\n\n"
-            "**Features:**\n"
-            "• Turbo-speed transfers with parallel processing\n"
-            "• Streamable links for media files\n"
-            "• Progress tracking for all operations\n"
-            "• Connection status monitoring"
-        )
-        await callback_query.message.edit_text(help_text)
-    
-    await callback_query.answer()
 
 @app.on_message(filters.document | filters.video | filters.audio | filters.photo)
 async def upload_file_handler(client, message: Message):
@@ -341,10 +163,10 @@ async def upload_file_handler(client, message: Message):
 
     # Telegram provides file_size on media objects; fall back to 0 if missing
     file_size = getattr(media, "file_size", 0) or 0
-    status_message = await message.reply_text(TEMPLATES["processing"], quote=True)
+    status_message = await message.reply_text("Processing your request...", quote=True)
 
     try:
-        await safe_edit(status_message, TEMPLATES["downloading"])
+        await status_message.edit_text("Downloading from Telegram...")
         start_dl = time.time()
         # Download into memory if small, otherwise to temp file
         if use_memory_stream(file_size):
@@ -423,20 +245,18 @@ async def upload_file_handler(client, message: Message):
             if os.path.exists(downloaded_path):
                 os.remove(downloaded_path)
 
-        # Update statistics
-        bot_stats.add_file(total_size)
-
         # Build presigned URL (24 hours)
         presigned_url = s3_client.generate_presigned_url('get_object', Params={'Bucket': WASABI_BUCKET, 'Key': file_name}, ExpiresIn=86400)
 
-        await safe_edit(status_message, TEMPLATES["upload_success"].format(
-            file_name=file_name,
-            file_size=humanbytes(total_size),
-            presigned_url=presigned_url
-        ))
+        await status_message.edit_text(
+            f"✅ **Upload Successful!**\n\n"
+            f"**File:** `{file_name}`\n"
+            f"**Size:** {humanbytes(total_size)}\n"
+            f"**Streamable Link (24h expiry):**\n`{presigned_url}`"
+        )
     except Exception as e:
         err = "".join(traceback.format_exception_only(type(e), e)).strip()
-        await safe_edit(status_message, TEMPLATES["error"].format(error=err))
+        await status_message.edit_text(f"❌ An error occurred: `{err}`")
     finally:
         # ensure any local temp cleaned (safety)
         # no-op here because downloaded_path handled above
@@ -451,10 +271,7 @@ async def download_file_handler(client, message: Message):
 
     file_name = " ".join(message.command[1:])
     os.makedirs("./downloads", exist_ok=True)
-    status_message = await message.reply_text(
-        TEMPLATES["searching"].format(file_name=file_name), 
-        quote=True
-    )
+    status_message = await message.reply_text(f"Searching for `{file_name}`...", quote=True)
 
     try:
         # Check object metadata
@@ -489,7 +306,7 @@ async def download_file_handler(client, message: Message):
                 pass
 
             file_obj.seek(0)
-            await safe_edit(status_message, "Uploading to Telegram...")
+            await status_message.edit_text("Uploading to Telegram...")
             # Pyrogram accepts file-like objects for send_document
             await client.send_document(
                 chat_id=message.chat.id,
@@ -521,7 +338,7 @@ async def download_file_handler(client, message: Message):
             except asyncio.CancelledError:
                 pass
 
-            await safe_edit(status_message, "Uploading to Telegram...")
+            await status_message.edit_text("Uploading to Telegram...")
             await client.send_document(
                 chat_id=message.chat.id,
                 document=tmp_path,
@@ -534,72 +351,28 @@ async def download_file_handler(client, message: Message):
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
-        # Update statistics
-        bot_stats.add_file(total_size)
-
     except ClientError as e:
         code = e.response.get('Error', {}).get('Code', '')
         if code in ('404', 'NoSuchKey', 'NotFound'):
-            await safe_edit(status_message, TEMPLATES["file_not_found"].format(file_name=file_name))
+            await status_message.edit_text(f"❌ **Error:** File not found in Wasabi: `{file_name}`")
         else:
             err = "".join(traceback.format_exception_only(type(e), e)).strip()
-            await safe_edit(status_message, TEMPLATES["error"].format(error=err))
+            await status_message.edit_text(f"❌ **S3 Client Error:** `{err}`")
     except Exception as e:
         err = "".join(traceback.format_exception_only(type(e), e)).strip()
-        await safe_edit(status_message, TEMPLATES["error"].format(error=err))
+        await status_message.edit_text(f"❌ **An unexpected error occurred:** `{err}`")
     finally:
         # ensure downloads dir is cleaned if necessary (we used temp files)
         pass
 
-# --- Health check endpoint for Render ---
-async def health_check(request):
-    # Check if services are connected
-    wasabi_status = await check_wasabi_connection()
-    telegram_status = await check_telegram_connection()
-    
-    status = {
-        "status": "ok",
-        "uptime": bot_stats.get_uptime(),
-        "wasabi": wasabi_status,
-        "telegram": telegram_status,
-        "files_processed": bot_stats.files_processed,
-        "data_transferred": humanbytes(bot_stats.data_transferred)
-    }
-    
-    return web.json_response(status)
-
-async def start_web_server():
-    """Start a simple web server for health checks on Render"""
-    app_web = web.Application()
-    app_web.router.add_get('/', health_check)
-    app_web.router.add_get('/health', health_check)
-    app_web.router.add_get('/status', health_check)
-    
-    runner = web.AppRunner(app_web)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    await site.start()
-    print(f"Web server started on port {PORT}")
-
 # --- Main Execution ---
 if __name__ == "__main__":
     print("Bot is starting with TURBO-SPEED settings...")
-    
-    # Create event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
     try:
-        # Start web server
-        loop.create_task(start_web_server())
-        
-        # Start the bot
-        print("Starting Telegram bot...")
         app.run()
     except KeyboardInterrupt:
         print("Bot stopped by user.")
     except Exception as e:
         print("Fatal error while running the bot:", e)
-        traceback.print_exc()
     finally:
         print("Bot has stopped.")
