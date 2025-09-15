@@ -32,15 +32,8 @@ if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, W
     print("Missing one or more required environment variables. Please check your .env file.")
     exit(1)
 
-# --- Initialize Pyrogram Client with port 5000 ---
-app = Client(
-    "wasabi_bot", 
-    api_id=API_ID, 
-    api_hash=API_HASH, 
-    bot_token=BOT_TOKEN, 
-    workers=20,
-    port=5000  # Added port 5000 configuration
-)
+# --- Initialize Pyrogram Client ---
+app = Client("wasabi_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=20)
 
 # --- Boto3 Transfer Configuration for TURBO SPEED ---
 transfer_config = TransferConfig(
@@ -368,6 +361,11 @@ async def download_file_handler(client, message: Message):
 # --- Main Execution ---
 if __name__ == "__main__":
     print("Bot is starting with TURBO-SPEED settings...")
+    
+    # If you need to run on a specific port, you might need to use a different approach
+    # Pyrogram doesn't directly support specifying a port for client connections
+    # You might need to use a proxy or modify the network layer configuration
+    
     try:
         app.run()
     except KeyboardInterrupt:
