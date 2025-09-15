@@ -18,6 +18,7 @@ from pyrogram.enums import ParseMode
 from botocore.exceptions import NoCredentialsError, ClientError
 from pyrogram.errors import FloodWait
 from boto3.s3.transfer import TransferConfig
+from botocore.config import Config as BotoConfig
 
 # Load environment variables from .env file
 load_dotenv()
@@ -41,31 +42,41 @@ if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, W
     exit()
 
 # --- Initialize Pyrogram Client ---
-# Increased workers for better performance with multiple concurrent tasks.
-app = Client("wasabi_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=20)
+# Extreme workers for maximum performance
+app = Client("wasabi_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=50)
 
-# --- Boto3 Transfer Configuration for TURBO SPEED ---
-# This enables multipart transfers and uses multiple threads for significant speed boosts.
+# --- Extreme Boto3 Configuration for ULTRA TURBO SPEED ---
+# Optimized for maximum parallel processing
+boto_config = BotoConfig(
+    retries={'max_attempts': 5, 'mode': 'adaptive'},
+    max_pool_connections=100,  # Extreme connection pooling
+    connect_timeout=30,
+    read_timeout=60,
+    tcp_keepalive=True
+)
+
 transfer_config = TransferConfig(
-    multipart_threshold=8 * 1024 * 1024,   # Start multipart for files > 8MB
-    max_concurrency=16,                   # 🚀 Increase parallel threads
-    multipart_chunksize=32 * 1024 * 1024, # Larger chunks for fewer requests
+    multipart_threshold=5 * 1024 * 1024,   # Start multipart for files > 5MB
+    max_concurrency=50,                    # 🚀🚀 Extreme parallel threads
+    multipart_chunksize=50 * 1024 * 1024,  # Larger chunks for fewer requests
+    num_download_attempts=10,              # More retries for stability
     use_threads=True
 )
 
-# --- Initialize Boto3 Client for Wasabi ---
+# --- Initialize Boto3 Client for Wasabi with Extreme Settings ---
 wasabi_endpoint_url = f'https://s3.{WASABI_REGION}.wasabisys.com'
 s3_client = boto3.client(
     's3',
     endpoint_url=wasabi_endpoint_url,
     aws_access_key_id=WASABI_ACCESS_KEY,
-    aws_secret_access_key=WASABI_SECRET_KEY
+    aws_secret_access_key=WASABI_SECRET_KEY,
+    config=boto_config  # Apply extreme config
 )
 
 # --- Rate limiting ---
 user_limits = {}
-MAX_REQUESTS_PER_MINUTE = 15
-MAX_FILE_SIZE = 4 * 1024 * 1024 * 1024  # 4GB
+MAX_REQUESTS_PER_MINUTE = 30  # Increased limit for power users
+MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10GB Ultra size limit
 
 # --- Authorization Check ---
 async def is_authorized(user_id):
@@ -81,7 +92,8 @@ class HealthHandler(BaseHTTPRequestHandler):
             response = {
                 "status": "healthy",
                 "timestamp": time.time(),
-                "bucket": WASABI_BUCKET
+                "bucket": WASABI_BUCKET,
+                "performance_mode": "ULTRA_TURBO"
             }
             self.wfile.write(json.dumps(response).encode())
         elif self.path == '/stats':
@@ -93,14 +105,15 @@ class HealthHandler(BaseHTTPRequestHandler):
             
             response = {
                 "user_limits_count": len(user_limits),
-                "active_users": active_users
+                "active_users": active_users,
+                "performance_mode": "ULTRA_TURBO"
             }
             self.wfile.write(json.dumps(response).encode())
         else:
             self.send_response(200)
             self.send_header('Content-type', 'text/plain')
             self.end_headers()
-            self.wfile.write(b"Wasabi Storage Bot is running!")
+            self.wfile.write(b"🚀 Ultra Turbo Wasabi Storage Bot is running!")
 
     def log_message(self, format, *args):
         # Disable logging to prevent conflicts with Pyrogram
@@ -184,29 +197,31 @@ def get_user_folder(user_id):
     """Get user-specific folder path"""
     return f"user_{user_id}"
 
-def create_modern_progress_bar(percentage, length=10):
-    """Create a modern visual progress bar"""
+def create_ultra_progress_bar(percentage, length=12):
+    """Create an ultra modern visual progress bar"""
     filled_length = int(length * percentage / 100)
     
     # Create a gradient effect based on progress
-    if percentage < 30:
-        filled_char = "▰"
-        empty_char = "▱"
-    elif percentage < 70:
-        filled_char = "🟦"
-        empty_char = "⬜"
+    if percentage < 25:
+        filled_char = "⚡"
+        empty_char = "⚡"
+    elif percentage < 50:
+        filled_char = "🔥"
+        empty_char = "⚡"
+    elif percentage < 75:
+        filled_char = "🚀"
+        empty_char = "🔥"
     else:
-        filled_char = "🟩"
-        empty_char = "⬜"
+        filled_char = "💯"
+        empty_char = "🚀"
     
     bar = filled_char * filled_length + empty_char * (length - filled_length)
-    
-    # Add percentage indicator at the end
     return f"{bar}"
 
-async def progress_reporter(message: Message, status: dict, total_size: int, task: str, start_time: float):
-    """Modern progress reporter with sleek visual design"""
+async def ultra_progress_reporter(message: Message, status: dict, total_size: int, task: str, start_time: float):
+    """Ultra turbo progress reporter with extreme performance metrics"""
     last_update = 0
+    speed_samples = []
     
     while status['running']:
         current_time = time.time()
@@ -218,10 +233,16 @@ async def progress_reporter(message: Message, status: dict, total_size: int, tas
         else:
             percentage = 0
         
-        # Calculate speed and ETA
+        # Calculate speed with smoothing
         speed = status['seen'] / elapsed_time if elapsed_time > 0 else 0
+        speed_samples.append(speed)
+        if len(speed_samples) > 5:
+            speed_samples.pop(0)
+        avg_speed = sum(speed_samples) / len(speed_samples) if speed_samples else 0
+        
+        # Calculate ETA
         remaining = total_size - status['seen']
-        eta_seconds = remaining / speed if speed > 0 else 0
+        eta_seconds = remaining / avg_speed if avg_speed > 0 else 0
         
         # Format ETA
         if eta_seconds > 3600:
@@ -231,11 +252,11 @@ async def progress_reporter(message: Message, status: dict, total_size: int, tas
         else:
             eta = f"{int(eta_seconds)}s" if eta_seconds > 0 else "Calculating..."
         
-        # Create the progress bar with a modern design
-        progress_bar = create_modern_progress_bar(percentage)
+        # Create the progress bar with ultra design
+        progress_bar = create_ultra_progress_bar(percentage)
         
-        # Only update if significant change or every 2 seconds
-        if current_time - last_update > 2 or abs(percentage - status.get('last_percentage', 0)) > 3:
+        # Only update if significant change or every 1.5 seconds
+        if current_time - last_update > 1.5 or abs(percentage - status.get('last_percentage', 0)) > 2:
             status['last_percentage'] = percentage
             
             # Use HTML formatting
@@ -247,13 +268,14 @@ async def progress_reporter(message: Message, status: dict, total_size: int, tas
                 display_task = display_task[:32] + "..."
             
             text = (
-                f"<b>🚀 TURBO UPLOAD</b>\n\n"
+                f"<b>⚡ ULTRA TURBO MODE</b>\n\n"
                 f"<b>📁 {display_task}</b>\n\n"
                 f"{progress_bar}\n"
                 f"<b>{percentage:.1f}%</b> • {humanbytes(status['seen'])} / {humanbytes(total_size)}\n\n"
-                f"<b>⚡ Speed:</b> {humanbytes(speed)}/s\n"
+                f"<b>🚀 Speed:</b> {humanbytes(avg_speed)}/s\n"
                 f"<b>⏱️ ETA:</b> {eta}\n"
-                f"<b>🕒 Elapsed:</b> {time.strftime('%M:%S', time.gmtime(elapsed_time))}"
+                f"<b>🕒 Elapsed:</b> {time.strftime('%M:%S', time.gmtime(elapsed_time))}\n"
+                f"<b>🔧 Threads:</b> {transfer_config.max_concurrency}"
             )
             
             try:
@@ -265,31 +287,32 @@ async def progress_reporter(message: Message, status: dict, total_size: int, tas
                 # If HTML fails, try without formatting
                 try:
                     plain_text = (
-                        f"TURBO UPLOAD\n\n"
+                        f"ULTRA TURBO MODE\n\n"
                         f"{display_task}\n\n"
                         f"{progress_bar}\n"
                         f"{percentage:.1f}% • {humanbytes(status['seen'])} / {humanbytes(total_size)}\n\n"
-                        f"Speed: {humanbytes(speed)}/s\n"
+                        f"Speed: {humanbytes(avg_speed)}/s\n"
                         f"ETA: {eta}\n"
-                        f"Elapsed: {time.strftime('%M:%S', time.gmtime(elapsed_time))}"
+                        f"Elapsed: {time.strftime('%M:%S', time.gmtime(elapsed_time))}\n"
+                        f"Threads: {transfer_config.max_concurrency}"
                     )
                     await message.edit_text(plain_text)
                     last_update = current_time
                 except:
                     pass  # Ignore other edit errors
         
-        await asyncio.sleep(1)  # Update every second
+        await asyncio.sleep(0.8)  # Update faster for ultra mode
 
-def pyrogram_progress_callback(current, total, message, start_time, task):
-    """Progress callback for Pyrogram's synchronous operations with new design."""
+def ultra_pyrogram_progress_callback(current, total, message, start_time, task):
+    """Ultra progress callback for Pyrogram's synchronous operations."""
     try:
-        if not hasattr(pyrogram_progress_callback, 'last_edit_time') or time.time() - pyrogram_progress_callback.last_edit_time > 2:
+        if not hasattr(ultra_pyrogram_progress_callback, 'last_edit_time') or time.time() - ultra_pyrogram_progress_callback.last_edit_time > 1.5:
             percentage = min((current * 100 / total), 100) if total > 0 else 0
             
-            # Create a modern progress bar
-            bar_length = 8
+            # Create an ultra progress bar
+            bar_length = 10
             filled = int(bar_length * percentage / 100)
-            bar = "▰" * filled + "▱" * (bar_length - filled)
+            bar = "🚀" * filled + "⚡" * (bar_length - filled)
             
             # Use HTML formatting
             escaped_task = escape_html(task)
@@ -302,7 +325,7 @@ def pyrogram_progress_callback(current, total, message, start_time, task):
             elapsed_time = time.time() - start_time
             
             text = (
-                f"<b>⬇️ DOWNLOADING</b>\n"
+                f"<b>⬇️ ULTRA DOWNLOAD</b>\n"
                 f"<b>📁 {display_task}</b>\n"
                 f"{bar} <b>{percentage:.1f}%</b>\n"
                 f"<b>⏱️ Elapsed:</b> {time.strftime('%M:%S', time.gmtime(elapsed_time))}"
@@ -313,12 +336,12 @@ def pyrogram_progress_callback(current, total, message, start_time, task):
             except:
                 # If HTML fails, try without formatting
                 message.edit_text(
-                    f"DOWNLOADING\n"
+                    f"ULTRA DOWNLOAD\n"
                     f"{display_task}\n"
                     f"{bar} {percentage:.1f}%\n"
                     f"Elapsed: {time.strftime('%M:%S', time.gmtime(elapsed_time))}"
                 )
-            pyrogram_progress_callback.last_edit_time = time.time()
+            ultra_pyrogram_progress_callback.last_edit_time = time.time()
     except Exception:
         pass
 
@@ -334,28 +357,46 @@ async def start_command(client, message: Message):
     # Send the welcome image with caption
     await message.reply_photo(
         photo=WELCOME_IMAGE_URL,
-        caption="Hello! I am a <b>Turbo-Speed</b> Cloud storage bot.\n\n"
-                "I use parallel processing to make transfers incredibly fast.\n\n"
-                "➡️ <b>To upload:</b> Just send me any file.\n"
+        caption="🚀 <b>ULTRA TURBO CLOUD STORAGE BOT</b>\n\n"
+                "Experience extreme speed with our optimized parallel processing technology!\n\n"
+                "➡️ <b>To upload:</b> Just send me any file (up to 10GB!)\n"
                 "⬅️ <b>To download:</b> Use <code>/download &lt;file_name&gt;</code>\n"
                 "📋 <b>To list files:</b> Use <code>/list</code>\n\n"
-                "<b>Performance Features:</b>\n"
-        "Multi-threaded parallel processing\n"
-        "4GB file size support\n"
-        "Adaptive retry system\n"
-        "Real-time speed monitoring\n"
-        "Connection pooling\n"
-        "Memory optimization\n\n"
-        "<b>Owner:</b> Mraprguild\n"
-        "<b>Email:</b> mraprguild@gmail.com"
-        "<b>Telegram:</b> @Sathishkumar33",
+                "<b>⚡ Extreme Performance Features:</b>\n"
+                "• 50x Multi-threaded parallel processing\n"
+                "• 10GB file size support\n"
+                "• Adaptive retry system with 10 attempts\n"
+                "• Real-time speed monitoring with smoothing\n"
+                "• 100 connection pooling for maximum throughput\n"
+                "• Memory optimization for large files\n"
+                "• TCP Keepalive for stable connections\n\n"
+                "<b>💎 Owner:</b> Mraprguild\n"
+                "<b>📧 Email:</b> mraprguild@gmail.com\n"
+                "<b>📱 Telegram:</b> @Sathishkumar33",
+        parse_mode=ParseMode.HTML
+    )
+
+@app.on_message(filters.command("turbo"))
+async def turbo_mode_command(client, message: Message):
+    """Shows turbo mode status"""
+    # Check authorization
+    if not await is_authorized(message.from_user.id):
+        await message.reply_text("❌ Unauthorized access.")
+        return
         
+    await message.reply_text(
+        f"⚡ <b>ULTRA TURBO MODE ACTIVE</b>\n\n"
+        f"<b>Max Concurrency:</b> {transfer_config.max_concurrency} threads\n"
+        f"<b>Chunk Size:</b> {humanbytes(transfer_config.multipart_chunksize)}\n"
+        f"<b>Multipart Threshold:</b> {humanbytes(transfer_config.multipart_threshold)}\n"
+        f"<b>Max File Size:</b> {humanbytes(MAX_FILE_SIZE)}\n"
+        f"<b>Connection Pool:</b> {boto_config.max_pool_connections} connections",
         parse_mode=ParseMode.HTML
     )
 
 @app.on_message(filters.document | filters.video | filters.audio | filters.photo)
 async def upload_file_handler(client, message: Message):
-    """Handles file uploads to Wasabi using multipart transfers."""
+    """Handles file uploads to Wasabi using extreme multipart transfers."""
     # Check authorization
     if not await is_authorized(message.from_user.id):
         await message.reply_text("❌ Unauthorized access.")
@@ -377,11 +418,11 @@ async def upload_file_handler(client, message: Message):
         return
 
     file_path = None
-    status_message = await message.reply_text("🔄 Processing your request...", quote=True)
+    status_message = await message.reply_text("⚡ Initializing ULTRA TURBO mode...", quote=True)
 
     try:
-        await status_message.edit_text("⬇️ Downloading from Telegram...")
-        file_path = await message.download(progress=pyrogram_progress_callback, progress_args=(status_message, time.time(), "Downloading"))
+        await status_message.edit_text("⬇️ Downloading from Telegram (Turbo Mode)...")
+        file_path = await message.download(progress=ultra_pyrogram_progress_callback, progress_args=(status_message, time.time(), "Downloading"))
         
         file_name = f"{get_user_folder(message.from_user.id)}/{sanitize_filename(os.path.basename(file_path))}"
         status = {'running': True, 'seen': 0}
@@ -390,16 +431,20 @@ async def upload_file_handler(client, message: Message):
             status['seen'] += bytes_amount
 
         reporter_task = asyncio.create_task(
-            progress_reporter(status_message, status, media.file_size, f"Uploading {os.path.basename(file_path)} (Turbo)", time.time())
+            ultra_progress_reporter(status_message, status, media.file_size, f"Uploading {os.path.basename(file_path)} (ULTRA TURBO)", time.time())
         )
         
-        await asyncio.to_thread(
-            s3_client.upload_file,
-            file_path,
-            WASABI_BUCKET,
-            file_name,
-            Callback=boto_callback,
-            Config=transfer_config  # <-- TURBO SPEED ENABLED
+        # Use thread pool for maximum parallelism
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: s3_client.upload_file(
+                file_path,
+                WASABI_BUCKET,
+                file_name,
+                Callback=boto_callback,
+                Config=transfer_config  # <-- ULTRA TURBO SPEED
+            )
         )
         
         status['running'] = False
@@ -413,10 +458,11 @@ async def upload_file_handler(client, message: Message):
         safe_url = escape_html(presigned_url)
         
         await status_message.edit_text(
-            f"✅ <b>Upload Successful!</b>\n\n"
+            f"✅ <b>ULTRA TURBO UPLOAD COMPLETE!</b>\n\n"
             f"<b>📁 File:</b> <code>{safe_file_name}</code>\n"
             f"<b>📦 Size:</b> {humanbytes(media.file_size)}\n"
-            f"<b>🔗 Streamable Link (24h expiry):</b>\n<code>{safe_url}</code>",
+            f"<b>🔗 Streamable Link (24h expiry):</b>\n<code>{safe_url}</code>\n\n"
+            f"<b>⚡ Performance:</b> Ultra Turbo Mode",
             parse_mode=ParseMode.HTML
         )
 
@@ -429,7 +475,7 @@ async def upload_file_handler(client, message: Message):
 
 @app.on_message(filters.command("download"))
 async def download_file_handler(client, message: Message):
-    """Handles file downloads from Wasabi using multipart transfers."""
+    """Handles file downloads from Wasabi using extreme multipart transfers."""
     # Check authorization
     if not await is_authorized(message.from_user.id):
         await message.reply_text("❌ Unauthorized access.")
@@ -456,53 +502,28 @@ async def download_file_handler(client, message: Message):
         meta = await asyncio.to_thread(s3_client.head_object, Bucket=WASABI_BUCKET, Key=user_file_name)
         total_size = int(meta.get('ContentLength', 0))
 
-        # Check file size limit
-        if total_size > MAX_FILE_SIZE:
-            await status_message.edit_text(f"❌ File too large. Maximum size is {humanbytes(MAX_FILE_SIZE)}")
-            return
+# Check file size limit
+    if hasattr(media, 'file_size') and media.file_size > MAX_FILE_SIZE:
+        await message.reply_text(f"âŒ File too large. Maximum size is {humanbytes(MAX_FILE_SIZE)}")
+        return
 
+    file_path = None
+    status_message = await message.reply_text("âš¡ Initializing ULTRA TURBO mode...", quote=True)
+
+    try:
+        await status_message.edit_text("â¬‡ï¸ Downloading from Telegram (Turbo Mode)...")
+        file_path = await message.download(progress=ultra_pyrogram_progress_callback, progress_args=(status_message, time.time(), "Downloading"))
+        
+        file_name = f"{get_user_folder(message.from_user.id)}/{sanitize_filename(os.path.basename(file_path))}"
         status = {'running': True, 'seen': 0}
+        
         def boto_callback(bytes_amount):
             status['seen'] += bytes_amount
-            
-        reporter_task = asyncio.create_task(
-            progress_reporter(status_message, status, total_size, f"Downloading {safe_file_name} (Turbo)", time.time())
-        )
-        
-        await asyncio.to_thread(
-            s3_client.download_file,
-            WASABI_BUCKET,
-            user_file_name,
-            local_file_path,
-            Callback=boto_callback,
-            Config=transfer_config  # <-- TURBO SPEED ENABLED
-        )
-        
-        status['running'] = False
-        await asyncio.sleep(0.1)  # Give the reporter task a moment to finish
-        reporter_task.cancel()
-        
-        await status_message.edit_text("ðŸ“¤ Uploading to Telegram...")
-        await message.reply_document(
-            document=local_file_path,
-            caption=f"âœ… <b>Download Complete:</b> <code>{safe_file_name}</code>\n"
-                    f"ðŸ“¦ <b>Size:</b> {humanbytes(total_size)}",
-            parse_mode=ParseMode.HTML,
-            progress=pyrogram_progress_callback,
-            progress_args=(status_message, time.time(), "Uploading to Telegram")
-        )
-        
-        await status_message.delete()
 
-    except ClientError as e:
-        error_code = e.response['Error']['Code']
-        if error_code == '404':
-            await status_message.edit_text(f"âŒ <b>Error:</b> File not found in Wasabi: <code>{safe_file_name}</code>", parse_mode=ParseMode.HTML)
-        elif error_code == '403':
-            await status_message.edit_text("âŒ <b>Error:</b> Access denied. Check your Wasabi credentials.", parse_mode=ParseMode.HTML)
-        elif error_code == 'NoSuchBucket':
-            await status_message.edit_text("âŒ <b>Error:</b> Bucket does not exist.", parse_mode=ParseMode.HTML)
-        else:
+        reporter_task = asyncio.create_task(
+            ultra_progress_reporter(status_message, status, media.file_size, f"Uploading {os.path.basename(file_path)} (ULTRA TURBO)", time.time())
+        )
+                else:
             error_msg = escape_html(str(e))
             await status_message.edit_text(f"âŒ <b>S3 Error:</b> {error_code} - {error_msg}", parse_mode=ParseMode.HTML)
     except Exception as e:
@@ -549,19 +570,19 @@ async def list_files(client, message: Message):
 
 # --- Main Execution ---
 if __name__ == "__main__":
-    print("Bot is starting with TURBO-SPEED settings...")
+    print("ðŸš€ Starting ULTRA TURBO Wasabi Storage Bot with extreme performance settings...")
     
     # Start HTTP server in a separate thread for health checks
     http_thread = threading.Thread(target=run_http_server, daemon=True)
     http_thread.start()
     
     # Start the Pyrogram bot with FloodWait handling
-    max_retries = 3
+    max_retries = 5  # Increased retries for reliability
     retry_count = 0
     
     while retry_count < max_retries:
         try:
-            print("Starting bot...")
+            print("âš¡ Starting bot in ULTRA TURBO mode...")
             app.run()
             break
         except FloodWait as e:
