@@ -328,18 +328,25 @@ async def delete_file_handler(client, message: Message):
 @app.on_message(filters.command("status"))
 async def status_handler(client, message: Message):
     """Provides bot status information."""
-    import psutil
-    process = psutil.Process()
-    memory_usage = process.memory_info().rss / 1024 / 1024  # MB
-    
-    status_text = (
-        "🤖 **Bot Status**\n\n"
-        f"**Uptime:** {time.strftime('%Hh %Mm %Ss', time.gmtime(time.time() - process.create_time()))}\n"
-        f"**Memory Usage:** {memory_usage:.2f} MB\n"
-        f"**CPU Percent:** {psutil.cpu_percent()}%\n"
-        f"**Disk Usage:** {psutil.disk_usage('/').percent}%\n\n"
-        "✅ **Bot is running normally**"
-    )
+    try:
+        import psutil
+        process = psutil.Process()
+        memory_usage = process.memory_info().rss / 1024 / 1024  # MB
+        
+        status_text = (
+            "🤖 **Bot Status**\n\n"
+            f"**Uptime:** {time.strftime('%Hh %Mm %Ss', time.gmtime(time.time() - process.create_time()))}\n"
+            f"**Memory Usage:** {memory_usage:.2f} MB\n"
+            f"**CPU Percent:** {psutil.cpu_percent()}%\n"
+            f"**Disk Usage:** {psutil.disk_usage('/').percent}%\n\n"
+            "✅ **Bot is running normally**"
+        )
+    except ImportError:
+        status_text = (
+            "🤖 **Bot Status**\n\n"
+            "✅ **Bot is running normally**\n"
+            "ℹ️ **Note:** Detailed system metrics require psutil package"
+        )
     
     await message.reply_text(status_text)
 
@@ -358,7 +365,7 @@ async def start_web_server():
     await site.start()
     logger.info(f"Health check server started on port {PORT}")
 
-# --- Main Execution with 24/7 Optimizations ---
+# --- Simplified Main Execution ---
 async def main():
     """Main function to start the bot with proper error handling"""
     # Start health check server
@@ -379,25 +386,17 @@ async def main():
     
     # Keep the bot running
     await idle()
-    
-    # Stop the bot gracefully
-    await app.stop()
-    logger.info("Bot stopped gracefully")
 
 if __name__ == "__main__":
-    # Set up signal handlers for graceful shutdown
-    import signal
-    loop = asyncio.get_event_loop()
-    
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, lambda: asyncio.create_task(app.stop()))
-    
     # Run the bot with error handling
     try:
-        loop.run_until_complete(main())
+        asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"Bot crashed with error: {e}")
     finally:
-        loop.close()
+        # Ensure the client is stopped properly
+        if app.is_connected:
+            asyncio.run(app.stop())
+            logger.info("Bot stopped gracefully")
