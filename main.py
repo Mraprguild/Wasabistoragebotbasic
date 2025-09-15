@@ -30,6 +30,7 @@ WASABI_ACCESS_KEY = os.getenv("WASABI_ACCESS_KEY")
 WASABI_SECRET_KEY = os.getenv("WASABI_SECRET_KEY")
 WASABI_BUCKET = os.getenv("WASABI_BUCKET")
 WASABI_REGION = os.getenv("WASABI_REGION")
+AUTHORIZED_USERS = [int(user_id) for user_id in os.getenv("AUTHORIZED_USERS", "").split(",") if user_id]
 
 # Welcome image URL (you can replace this with your own image)
 WELCOME_IMAGE_URL = "https://raw.githubusercontent.com/Mraprguild8133/Telegramstorage-/refs/heads/main/IMG-20250915-WA0013.jpg"
@@ -65,6 +66,10 @@ s3_client = boto3.client(
 user_limits = {}
 MAX_REQUESTS_PER_MINUTE = 5
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
+
+# --- Authorization Check ---
+async def is_authorized(user_id):
+    return not AUTHORIZED_USERS or user_id in AUTHORIZED_USERS
 
 # --- Simple HTTP Server for Health Checks ---
 class HealthHandler(BaseHTTPRequestHandler):
@@ -175,6 +180,10 @@ async def check_rate_limit(user_id):
     user_limits[user_id].append(current_time)
     return True
 
+def get_user_folder(user_id):
+    """Get user-specific folder path"""
+    return f"user_{user_id}"
+
 async def progress_reporter(message: Message, status: dict, total_size: int, task: str, start_time: float):
     """Asynchronously reports progress of a background task."""
     while status['running']:
@@ -240,6 +249,11 @@ def pyrogram_progress_callback(current, total, message, start_time, task):
 @app.on_message(filters.command("start"))
 async def start_command(client, message: Message):
     """Handles the /start command."""
+    # Check authorization
+    if not await is_authorized(message.from_user.id):
+        await message.reply_text("❌ Unauthorized access.")
+        return
+        
     # Send the welcome image with caption
     await message.reply_photo(
         photo=WELCOME_IMAGE_URL,
@@ -250,7 +264,7 @@ async def start_command(client, message: Message):
                 "📋 <b>To list files:</b> Use <code>/list</code>\n\n"
                 "<b>Owner:</b> Mraprguild\n"
                 "<b>Telegram:</b> @Sathishkumar33\n"
-                "<b>Email:</b> mraprguild@gmail.com",
+                "<b>Email:</b> mraprguild@gmail.com\n\n"
                 "Generated links are direct streamable links compatible with players like VLC & MX Player.",
         parse_mode=ParseMode.HTML
     )
@@ -258,6 +272,11 @@ async def start_command(client, message: Message):
 @app.on_message(filters.document | filters.video | filters.audio | filters.photo)
 async def upload_file_handler(client, message: Message):
     """Handles file uploads to Wasabi using multipart transfers."""
+    # Check authorization
+    if not await is_authorized(message.from_user.id):
+        await message.reply_text("❌ Unauthorized access.")
+        return
+    
     # Check rate limiting
     if not await check_rate_limit(message.from_user.id):
         await message.reply_text("❌ Rate limit exceeded. Please try again in a minute.")
@@ -280,14 +299,14 @@ async def upload_file_handler(client, message: Message):
         await status_message.edit_text("Downloading from Telegram...")
         file_path = await message.download(progress=pyrogram_progress_callback, progress_args=(status_message, time.time(), "Downloading"))
         
-        file_name = sanitize_filename(os.path.basename(file_path))
+        file_name = f"{get_user_folder(message.from_user.id)}/{sanitize_filename(os.path.basename(file_path))}"
         status = {'running': True, 'seen': 0}
         
         def boto_callback(bytes_amount):
             status['seen'] += bytes_amount
 
         reporter_task = asyncio.create_task(
-            progress_reporter(status_message, status, media.file_size, f"Uploading {file_name} (Turbo)", time.time())
+            progress_reporter(status_message, status, media.file_size, f"Uploading {os.path.basename(file_path)} (Turbo)", time.time())
         )
         
         await asyncio.to_thread(
@@ -306,7 +325,7 @@ async def upload_file_handler(client, message: Message):
         presigned_url = s3_client.generate_presigned_url('get_object', Params={'Bucket': WASABI_BUCKET, 'Key': file_name}, ExpiresIn=86400) # 24 hours
         
         # Use HTML formatting instead of markdown
-        safe_file_name = escape_html(file_name)
+        safe_file_name = escape_html(os.path.basename(file_path))
         safe_url = escape_html(presigned_url)
         
         await status_message.edit_text(
@@ -326,6 +345,11 @@ async def upload_file_handler(client, message: Message):
 @app.on_message(filters.command("download"))
 async def download_file_handler(client, message: Message):
     """Handles file downloads from Wasabi using multipart transfers."""
+    # Check authorization
+    if not await is_authorized(message.from_user.id):
+        await message.reply_text("❌ Unauthorized access.")
+        return
+    
     # Check rate limiting
     if not await check_rate_limit(message.from_user.id):
         await message.reply_text("❌ Rate limit exceeded. Please try again in a minute.")
@@ -336,6 +360,7 @@ async def download_file_handler(client, message: Message):
         return
 
     file_name = " ".join(message.command[1:])
+    user_file_name = f"{get_user_folder(message.from_user.id)}/{file_name}"
     safe_file_name = escape_html(file_name)
     local_file_path = f"./downloads/{file_name}"
     os.makedirs("./downloads", exist_ok=True)
@@ -343,7 +368,7 @@ async def download_file_handler(client, message: Message):
     status_message = await message.reply_text(f"Searching for <code>{safe_file_name}</code>...", quote=True, parse_mode=ParseMode.HTML)
 
     try:
-        meta = await asyncio.to_thread(s3_client.head_object, Bucket=WASABI_BUCKET, Key=file_name)
+        meta = await asyncio.to_thread(s3_client.head_object, Bucket=WASABI_BUCKET, Key=user_file_name)
         total_size = int(meta.get('ContentLength', 0))
 
         # Check file size limit
@@ -362,7 +387,7 @@ async def download_file_handler(client, message: Message):
         await asyncio.to_thread(
             s3_client.download_file,
             WASABI_BUCKET,
-            file_name,
+            user_file_name,
             local_file_path,
             Callback=boto_callback,
             Config=transfer_config  # <-- TURBO SPEED ENABLED
@@ -404,25 +429,33 @@ async def download_file_handler(client, message: Message):
 @app.on_message(filters.command("list"))
 async def list_files(client, message: Message):
     """List files in the Wasabi bucket"""
+    # Check authorization
+    if not await is_authorized(message.from_user.id):
+        await message.reply_text("❌ Unauthorized access.")
+        return
+    
     # Check rate limiting
     if not await check_rate_limit(message.from_user.id):
         await message.reply_text("❌ Rate limit exceeded. Please try again in a minute.")
         return
         
     try:
-        response = await asyncio.to_thread(s3_client.list_objects_v2, Bucket=WASABI_BUCKET)
+        user_prefix = get_user_folder(message.from_user.id) + "/"
+        response = await asyncio.to_thread(s3_client.list_objects_v2, Bucket=WASABI_BUCKET, Prefix=user_prefix)
+        
         if 'Contents' not in response:
-            await message.reply_text("No files found in the bucket.")
+            await message.reply_text("No files found in your storage.")
             return
         
-        files = [obj['Key'] for obj in response['Contents']]
+        # Remove the user prefix from displayed filenames
+        files = [obj['Key'].replace(user_prefix, "") for obj in response['Contents']]
         safe_files = [escape_html(file) for file in files[:20]]  # Show first 20 files
         files_list = "\n".join([f"• <code>{file}</code>" for file in safe_files])
         
         if len(files) > 20:
             files_list += f"\n\n...and {len(files) - 20} more files"
         
-        await message.reply_text(f"<b>Files in bucket:</b>\n\n{files_list}", parse_mode=ParseMode.HTML)
+        await message.reply_text(f"<b>Your files:</b>\n\n{files_list}", parse_mode=ParseMode.HTML)
     
     except Exception as e:
         error_msg = escape_html(str(e))
