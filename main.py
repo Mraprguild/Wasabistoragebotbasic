@@ -218,13 +218,13 @@ async def start_command(client, message: Message):
                 "⬅️ Use <code>/download filename</code> to download\n"
                 "📋 Use <code>/list</code> to list files\n\n"
                 "<b>Speed Mode:</b> EXTREME 🚀",
-                "⚡ <b>Performance Features:</b>\n"
-                "• Multi-threaded parallel processing\n"
-                "• 4GB file size support\n"
-                "• Adaptive retry system\n"
-                "• Real-time speed monitoring\n"
-                "• Connection pooling\n"
-                "• Memory optimization\n\n"
+                "<b>Performance Features:</b>\n"
+                "Multi-threaded parallel processing\n"
+                "4GB file size support\n"
+                "Adaptive retry system\n"
+                "Real-time speed monitoring\n"
+                "Connection pooling\n"
+                "Memory optimization\n\n"
                 "<b>Owner:</b> Mraprguild\n"
                 "<b>Telegram:</b> @Sathishkumar33",
         parse_mode=ParseMode.HTML
