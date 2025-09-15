@@ -8,9 +8,11 @@ import tempfile
 import traceback
 import boto3
 import asyncio
+import re
 from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import Message
+from pyrogram import enums
 from botocore.exceptions import NoCredentialsError, ClientError
 from pyrogram.errors import FloodWait
 from boto3.s3.transfer import TransferConfig
@@ -65,15 +67,22 @@ def humanbytes(size):
         t_n += 1
     return "{:.2f}".format(size) + power_dict[t_n]
 
+def escape_markdown(text):
+    """Escape markdown special characters."""
+    if not text:
+        return ""
+    escape_chars = r'\_*[]()~`>#+-=|{}.!'
+    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
+
 async def safe_edit(message: Message, text: str):
     """Safely edit a message, handling FloodWait and other transient errors."""
     try:
-        await message.edit_text(text)
+        await message.edit_text(text, parse_mode=enums.ParseMode.MARKDOWN)
     except FloodWait as e:
         # wait the required duration, then try once more
         await asyncio.sleep(e.x)
         try:
-            await message.edit_text(text)
+            await message.edit_text(text, parse_mode=enums.ParseMode.MARKDOWN)
         except Exception:
             pass
     except Exception:
@@ -143,7 +152,8 @@ async def start_command(client, message: Message):
         "I use parallel processing to make transfers fast.\n\n"
         "➡️ **To upload:** Just send me any file.\n"
         "⬅️ **To download:** Use `/download <file_name>`.\n\n"
-        "Generated links are direct streamable links compatible with players like VLC & MX Player."
+        "Generated links are direct streamable links compatible with players like VLC & MX Player.",
+        parse_mode=enums.ParseMode.MARKDOWN
     )
 
 @app.on_message(filters.document | filters.video | filters.audio | filters.photo)
@@ -159,7 +169,7 @@ async def upload_file_handler(client, message: Message):
     status_message = await message.reply_text("Processing your request...", quote=True)
 
     try:
-        await status_message.edit_text("Downloading from Telegram...")
+        await safe_edit(status_message, "Downloading from Telegram...")
         start_dl = time.time()
         # Download into memory if small, otherwise to temp file
         if use_memory_stream(file_size):
@@ -181,7 +191,7 @@ async def upload_file_handler(client, message: Message):
                 status['seen'] += bytes_amount
 
             reporter_task = asyncio.create_task(
-                progress_reporter(status_message, status, total_size, f"Uploading `{file_name}` (Turbo)", time.time())
+                progress_reporter(status_message, status, total_size, f"Uploading `{escape_markdown(file_name)}` (Turbo)", time.time())
             )
 
             # upload_fileobj is blocking; run in thread
@@ -215,7 +225,7 @@ async def upload_file_handler(client, message: Message):
                 status['seen'] += bytes_amount
 
             reporter_task = asyncio.create_task(
-                progress_reporter(status_message, status, total_size, f"Uploading `{file_name}` (Turbo)", time.time())
+                progress_reporter(status_message, status, total_size, f"Uploading `{escape_markdown(file_name)}` (Turbo)", time.time())
             )
 
             await asyncio.to_thread(
@@ -241,15 +251,16 @@ async def upload_file_handler(client, message: Message):
         # Build presigned URL (24 hours)
         presigned_url = s3_client.generate_presigned_url('get_object', Params={'Bucket': WASABI_BUCKET, 'Key': file_name}, ExpiresIn=86400)
 
-        await status_message.edit_text(
+        await safe_edit(
+            status_message,
             f"✅ **Upload Successful!**\n\n"
-            f"**File:** `{file_name}`\n"
+            f"**File:** `{escape_markdown(file_name)}`\n"
             f"**Size:** {humanbytes(total_size)}\n"
             f"**Streamable Link (24h expiry):**\n`{presigned_url}`"
         )
     except Exception as e:
         err = "".join(traceback.format_exception_only(type(e), e)).strip()
-        await status_message.edit_text(f"❌ An error occurred: `{err}`")
+        await safe_edit(status_message, f"❌ An error occurred: `{escape_markdown(err)}`")
     finally:
         # ensure any local temp cleaned (safety)
         # no-op here because downloaded_path handled above
@@ -259,12 +270,12 @@ async def upload_file_handler(client, message: Message):
 async def download_file_handler(client, message: Message):
     """Handles file downloads from Wasabi using multipart transfers. Hybrid streaming to Telegram."""
     if len(message.command) < 2:
-        await message.reply_text("Usage: `/download <file_name_in_wasabi>`")
+        await message.reply_text("Usage: `/download <file_name_in_wasabi>`", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
     file_name = " ".join(message.command[1:])
     os.makedirs("./downloads", exist_ok=True)
-    status_message = await message.reply_text(f"Searching for `{file_name}`...", quote=True)
+    status_message = await message.reply_text(f"Searching for `{escape_markdown(file_name)}`...", quote=True, parse_mode=enums.ParseMode.MARKDOWN)
 
     try:
         # Check object metadata
@@ -277,7 +288,7 @@ async def download_file_handler(client, message: Message):
             status['seen'] += bytes_amount
 
         reporter_task = asyncio.create_task(
-            progress_reporter(status_message, status, total_size, f"Downloading `{file_name}` (Turbo)", time.time())
+            progress_reporter(status_message, status, total_size, f"Downloading `{escape_markdown(file_name)}` (Turbo)", time.time())
         )
 
         if use_memory_stream(total_size):
@@ -299,12 +310,12 @@ async def download_file_handler(client, message: Message):
                 pass
 
             file_obj.seek(0)
-            await status_message.edit_text("Uploading to Telegram...")
+            await safe_edit(status_message, "Uploading to Telegram...")
             # Pyrogram accepts file-like objects for send_document
             await client.send_document(
                 chat_id=message.chat.id,
                 document=file_obj,
-                filename=file_name,
+                file_name=file_name,
                 progress=pyrogram_progress_callback,
                 progress_args=(status_message, time.time(), "Uploading")
             )
@@ -331,10 +342,11 @@ async def download_file_handler(client, message: Message):
             except asyncio.CancelledError:
                 pass
 
-            await status_message.edit_text("Uploading to Telegram...")
+            await safe_edit(status_message, "Uploading to Telegram...")
             await client.send_document(
                 chat_id=message.chat.id,
                 document=tmp_path,
+                file_name=file_name,
                 progress=pyrogram_progress_callback,
                 progress_args=(status_message, time.time(), "Uploading")
             )
@@ -347,13 +359,13 @@ async def download_file_handler(client, message: Message):
     except ClientError as e:
         code = e.response.get('Error', {}).get('Code', '')
         if code in ('404', 'NoSuchKey', 'NotFound'):
-            await status_message.edit_text(f"❌ **Error:** File not found in Wasabi: `{file_name}`")
+            await safe_edit(status_message, f"❌ **Error:** File not found in Wasabi: `{escape_markdown(file_name)}`")
         else:
             err = "".join(traceback.format_exception_only(type(e), e)).strip()
-            await status_message.edit_text(f"❌ **S3 Client Error:** `{err}`")
+            await safe_edit(status_message, f"❌ **S3 Client Error:** `{escape_markdown(err)}`")
     except Exception as e:
         err = "".join(traceback.format_exception_only(type(e), e)).strip()
-        await status_message.edit_text(f"❌ **An unexpected error occurred:** `{err}`")
+        await safe_edit(status_message, f"❌ **An unexpected error occurred:** `{escape_markdown(err)}`")
     finally:
         # ensure downloads dir is cleaned if necessary (we used temp files)
         pass
@@ -361,10 +373,6 @@ async def download_file_handler(client, message: Message):
 # --- Main Execution ---
 if __name__ == "__main__":
     print("Bot is starting with TURBO-SPEED settings...")
-    
-    # If you need to run on a specific port, you might need to use a different approach
-    # Pyrogram doesn't directly support specifying a port for client connections
-    # You might need to use a proxy or modify the network layer configuration
     
     try:
         app.run()
