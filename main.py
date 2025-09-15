@@ -7,7 +7,8 @@ import re
 import signal
 import atexit
 import threading
-from aiohttp import web
+import socket
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -59,37 +60,56 @@ user_limits = {}
 MAX_REQUESTS_PER_MINUTE = 5
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
 
-# --- HTTP Server for Health Checks ---
-async def handle_root(request):
-    return web.Response(text="Wasabi Storage Bot is running!")
+# --- Simple HTTP Server for Health Checks ---
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            response = {
+                "status": "healthy",
+                "timestamp": time.time(),
+                "bucket": WASABI_BUCKET
+            }
+            self.wfile.write(str(response).encode())
+        elif self.path == '/stats':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            current_time = time.time()
+            active_users = len([k for k, v in user_limits.items() if any(current_time - t < 300 for t in v)])
+            
+            response = {
+                "user_limits_count": len(user_limits),
+                "active_users": active_users
+            }
+            self.wfile.write(str(response).encode())
+        else:
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b"Wasabi Storage Bot is running!")
 
-async def handle_health(request):
-    return web.json_response({
-        "status": "healthy",
-        "timestamp": time.time(),
-        "bucket": WASABI_BUCKET
-    })
-
-async def handle_stats(request):
-    current_time = time.time()
-    active_users = len([k for k, v in user_limits.items() if any(current_time - t < 300 for t in v)])
-    
-    return web.json_response({
-        "user_limits_count": len(user_limits),
-        "active_users": active_users
-    })
+    def log_message(self, format, *args):
+        # Disable logging to prevent conflicts with Pyrogram
+        return
 
 def run_http_server():
-    app_http = web.Application()
-    app_http.router.add_get('/', handle_root)
-    app_http.router.add_get('/health', handle_health)
-    app_http.router.add_get('/stats', handle_stats)
-    
     # Use the PORT environment variable if available (common in cloud platforms)
     port = int(os.environ.get('PORT', 8080))
     
-    print(f"Starting HTTP server on port {port}")
-    web.run_app(app_http, port=port, host='0.0.0.0')
+    # Create a simple HTTP server without signal handling
+    with HTTPServer(('0.0.0.0', port), HealthHandler) as httpd:
+        print(f"HTTP server running on port {port}")
+        # Set timeout to prevent blocking
+        httpd.timeout = 1
+        while True:
+            try:
+                httpd.handle_request()
+            except Exception as e:
+                print(f"HTTP server error: {e}")
+            time.sleep(5)  # Check for requests every 5 seconds
 
 # --- Helper Functions & Classes ---
 def humanbytes(size):
