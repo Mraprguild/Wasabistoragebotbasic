@@ -47,11 +47,12 @@ app = Client("wasabi_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN
 # --- Boto3 Transfer Configuration for TURBO SPEED ---
 # This enables multipart transfers and uses multiple threads for significant speed boosts.
 transfer_config = TransferConfig(
-    multipart_threshold=25 * 1024 * 1024,  # Start multipart for files > 25MB
-    max_concurrency=20,                     # Use up to 20 parallel threads
-    multipart_chunksize=10 * 1024 * 1024,    # 8MB chunks
+    multipart_threshold=8 * 1024 * 1024,   # Start multipart for files > 8MB
+    max_concurrency=50,                   # 🚀 Increase parallel threads
+    multipart_chunksize=16 * 1024 * 1024, # Larger chunks for fewer requests
     use_threads=True
 )
+
 
 # --- Initialize Boto3 Client for Wasabi ---
 wasabi_endpoint_url = f'https://s3.{WASABI_REGION}.wasabisys.com'
