@@ -6,6 +6,8 @@ import asyncio
 import re
 import signal
 import atexit
+import threading
+from aiohttp import web
 from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -56,6 +58,38 @@ s3_client = boto3.client(
 user_limits = {}
 MAX_REQUESTS_PER_MINUTE = 5
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
+
+# --- HTTP Server for Health Checks ---
+async def handle_root(request):
+    return web.Response(text="Wasabi Storage Bot is running!")
+
+async def handle_health(request):
+    return web.json_response({
+        "status": "healthy",
+        "timestamp": time.time(),
+        "bucket": WASABI_BUCKET
+    })
+
+async def handle_stats(request):
+    current_time = time.time()
+    active_users = len([k for k, v in user_limits.items() if any(current_time - t < 300 for t in v)])
+    
+    return web.json_response({
+        "user_limits_count": len(user_limits),
+        "active_users": active_users
+    })
+
+def run_http_server():
+    app_http = web.Application()
+    app_http.router.add_get('/', handle_root)
+    app_http.router.add_get('/health', handle_health)
+    app_http.router.add_get('/stats', handle_stats)
+    
+    # Use the PORT environment variable if available (common in cloud platforms)
+    port = int(os.environ.get('PORT', 8080))
+    
+    print(f"Starting HTTP server on port {port}")
+    web.run_app(app_http, port=port, host='0.0.0.0')
 
 # --- Helper Functions & Classes ---
 def humanbytes(size):
@@ -335,5 +369,11 @@ async def list_files(client, message: Message):
 # --- Main Execution ---
 if __name__ == "__main__":
     print("Bot is starting with TURBO-SPEED settings...")
+    
+    # Start HTTP server in a separate thread for health checks
+    http_thread = threading.Thread(target=run_http_server, daemon=True)
+    http_thread.start()
+    
+    # Start the Pyrogram bot
     app.run()
     print("Bot has stopped.")
