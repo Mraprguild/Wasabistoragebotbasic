@@ -3,12 +3,21 @@ import time
 import math
 import boto3
 import asyncio
+import logging
 from dotenv import load_dotenv
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.types import Message
 from botocore.exceptions import NoCredentialsError, ClientError
-from pyrogram.errors import FloodWait
+from pyrogram.errors import FloodWait, BadRequest, Forbidden
 from boto3.s3.transfer import TransferConfig
+from aiohttp import web
+
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -21,15 +30,14 @@ WASABI_ACCESS_KEY = os.getenv("WASABI_ACCESS_KEY")
 WASABI_SECRET_KEY = os.getenv("WASABI_SECRET_KEY")
 WASABI_BUCKET = os.getenv("WASABI_BUCKET")
 WASABI_REGION = os.getenv("WASABI_REGION")
-PORT = int(os.environ.get("PORT", 8080))  # Render provides PORT environment variable
+PORT = int(os.environ.get("PORT", 8080))  # For Render/Heroku compatibility
 
 # --- Basic Checks ---
 if not all([API_ID, API_HASH, BOT_TOKEN, WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET, WASABI_REGION]):
-    print("Missing one or more required environment variables. Please check your .env file.")
+    logger.error("Missing one or more required environment variables. Please check your .env file.")
     exit()
 
 # --- Initialize Pyrogram Client ---
-# Added in_memory=True and adjusted for Render compatibility
 app = Client(
     "wasabi_bot", 
     api_id=API_ID, 
@@ -71,7 +79,13 @@ def humanbytes(size):
 
 async def progress_reporter(message: Message, status: dict, total_size: int, task: str, start_time: float):
     """Asynchronously reports progress of a background task."""
+    last_update = 0
     while status['running']:
+        # Only update every 3 seconds to avoid API flooding
+        if time.time() - last_update < 3:
+            await asyncio.sleep(0.5)
+            continue
+            
         percentage = (status['seen'] / total_size) * 100 if total_size > 0 else 0
         percentage = min(percentage, 100)
 
@@ -90,11 +104,23 @@ async def progress_reporter(message: Message, status: dict, total_size: int, tas
         )
         try:
             await message.edit_text(text)
+            last_update = time.time()
         except FloodWait as e:
             await asyncio.sleep(e.x)
-        except Exception:
-            pass # Ignore other edit errors
-        await asyncio.sleep(3) # Update every 3 seconds
+        except (BadRequest, Forbidden) as e:
+            logger.warning(f"Could not update progress message: {e}")
+            break  # Stop trying to update if message was deleted or we don't have permission
+        except Exception as e:
+            logger.error(f"Unexpected error in progress reporter: {e}")
+    
+    # Final update when done
+    try:
+        if status.get('completed', False):
+            await message.edit_text(f"✅ **{task} completed successfully!**")
+        else:
+            await message.edit_text(f"❌ **{task} was interrupted.**")
+    except Exception:
+        pass  # Ignore errors in final update
 
 def pyrogram_progress_callback(current, total, message, start_time, task):
     """Progress callback for Pyrogram's synchronous operations."""
@@ -104,8 +130,8 @@ def pyrogram_progress_callback(current, total, message, start_time, task):
             text = f"**{task}...** {percentage:.2f}%"
             message.edit_text(text)
             pyrogram_progress_callback.last_edit_time = time.time()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Error in pyrogram progress callback: {e}")
 
 # --- Bot Handlers ---
 @app.on_message(filters.command("start"))
@@ -116,7 +142,8 @@ async def start_command(client, message: Message):
         "I use aggressive parallel processing to make transfers incredibly fast.\n\n"
         "➡️ **To upload:** Just send me any file.\n"
         "⬅️ **To download:** Use `/download <file_name>`.\n"
-        "📂 **To list files:** Use `/list`.\n\n"
+        "📂 **To list files:** Use `/list`.\n"
+        "🗑️ **To delete a file:** Use `/delete <file_name>`.\n\n"
         "Generated links are direct streamable links compatible with players like VLC & MX Player."
     )
 
@@ -167,7 +194,7 @@ async def upload_file_handler(client, message: Message):
         file_path = await message.download(progress=pyrogram_progress_callback, progress_args=(status_message, time.time(), "Downloading"))
         
         file_name = os.path.basename(file_path)
-        status = {'running': True, 'seen': 0}
+        status = {'running': True, 'seen': 0, 'completed': False}
         
         def boto_callback(bytes_amount):
             status['seen'] += bytes_amount
@@ -186,6 +213,7 @@ async def upload_file_handler(client, message: Message):
         )
         
         status['running'] = False
+        status['completed'] = True
         reporter_task.cancel()
 
         presigned_url = s3_client.generate_presigned_url('get_object', Params={'Bucket': WASABI_BUCKET, 'Key': file_name}, ExpiresIn=86400)
@@ -193,10 +221,12 @@ async def upload_file_handler(client, message: Message):
         await status_message.edit_text(
             f"✅ **Upload Successful!**\n\n"
             f"**File:** `{file_name}`\n"
+            f"**Size:** {humanbytes(media.file_size)}\n"
             f"**Streamable Link (24h expiry):**\n`{presigned_url}`"
         )
 
     except Exception as e:
+        logger.error(f"Upload error: {e}")
         await status_message.edit_text(f"❌ An error occurred: {str(e)}")
     finally:
         if file_path and os.path.exists(file_path):
@@ -219,7 +249,7 @@ async def download_file_handler(client, message: Message):
         meta = await asyncio.to_thread(s3_client.head_object, Bucket=WASABI_BUCKET, Key=file_name)
         total_size = int(meta.get('ContentLength', 0))
 
-        status = {'running': True, 'seen': 0}
+        status = {'running': True, 'seen': 0, 'completed': False}
         def boto_callback(bytes_amount):
             status['seen'] += bytes_amount
             
@@ -237,12 +267,14 @@ async def download_file_handler(client, message: Message):
         )
         
         status['running'] = False
+        status['completed'] = True
         reporter_task.cancel()
         
         await status_message.edit_text("Uploading to Telegram...")
         await client.send_document(
             chat_id=message.chat.id,
             document=local_file_path,
+            caption=f"📥 Downloaded from Wasabi: `{file_name}`",
             progress=pyrogram_progress_callback,
             progress_args=(status_message, time.time(), "Uploading")
         )
@@ -255,35 +287,117 @@ async def download_file_handler(client, message: Message):
         else:
             await status_message.edit_text(f"❌ **S3 Client Error:** {e}")
     except Exception as e:
+        logger.error(f"Download error: {e}")
         await status_message.edit_text(f"❌ **An unexpected error occurred:** {str(e)}")
     finally:
         if os.path.exists(local_file_path):
             os.remove(local_file_path)
 
-# --- Health Check Endpoint for Render ---
-from aiohttp import web
+@app.on_message(filters.command("delete"))
+async def delete_file_handler(client, message: Message):
+    """Handles file deletion from Wasabi."""
+    if len(message.command) < 2:
+        await message.reply_text("Usage: `/delete <file_name_in_wasabi>`")
+        return
 
+    file_name = " ".join(message.command[1:])
+    status_message = await message.reply_text(f"Checking if `{file_name}` exists...", quote=True)
+
+    try:
+        # Verify file exists first
+        await asyncio.to_thread(s3_client.head_object, Bucket=WASABI_BUCKET, Key=file_name)
+        
+        # Delete the file
+        await asyncio.to_thread(
+            s3_client.delete_object,
+            Bucket=WASABI_BUCKET,
+            Key=file_name
+        )
+        
+        await status_message.edit_text(f"✅ **File deleted successfully:** `{file_name}`")
+
+    except ClientError as e:
+        if e.response['Error']['Code'] == '404':
+            await status_message.edit_text(f"❌ **Error:** File not found in Wasabi: `{file_name}`")
+        else:
+            await status_message.edit_text(f"❌ **S3 Client Error:** {e}")
+    except Exception as e:
+        logger.error(f"Delete error: {e}")
+        await status_message.edit_text(f"❌ **An unexpected error occurred:** {str(e)}")
+
+@app.on_message(filters.command("status"))
+async def status_handler(client, message: Message):
+    """Provides bot status information."""
+    import psutil
+    process = psutil.Process()
+    memory_usage = process.memory_info().rss / 1024 / 1024  # MB
+    
+    status_text = (
+        "🤖 **Bot Status**\n\n"
+        f"**Uptime:** {time.strftime('%Hh %Mm %Ss', time.gmtime(time.time() - process.create_time()))}\n"
+        f"**Memory Usage:** {memory_usage:.2f} MB\n"
+        f"**CPU Percent:** {psutil.cpu_percent()}%\n"
+        f"**Disk Usage:** {psutil.disk_usage('/').percent}%\n\n"
+        "✅ **Bot is running normally**"
+    )
+    
+    await message.reply_text(status_text)
+
+# --- Health Check Endpoint for 24/7 Monitoring ---
 async def health_check(request):
     return web.Response(text="OK")
 
-# --- Main Execution with Render Support ---
+async def start_web_server():
+    """Start a simple web server for health checks"""
+    app_web = web.Application()
+    app_web.router.add_get('/health', health_check)
+    app_web.router.add_get('/', health_check)
+    runner = web.AppRunner(app_web)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+    logger.info(f"Health check server started on port {PORT}")
+
+# --- Main Execution with 24/7 Optimizations ---
+async def main():
+    """Main function to start the bot with proper error handling"""
+    # Start health check server
+    await start_web_server()
+    
+    # Start the Pyrogram client
+    await app.start()
+    logger.info("Bot started successfully")
+    
+    # Set bot commands menu
+    await app.set_bot_commands([
+        ("start", "Start the bot"),
+        ("list", "List files in Wasabi"),
+        ("download", "Download a file from Wasabi"),
+        ("delete", "Delete a file from Wasabi"),
+        ("status", "Check bot status")
+    ])
+    
+    # Keep the bot running
+    await idle()
+    
+    # Stop the bot gracefully
+    await app.stop()
+    logger.info("Bot stopped gracefully")
+
 if __name__ == "__main__":
-    print("Bot is starting with EXTREME-SPEED settings...")
-    
-    # Start a simple web server for health checks (required by Render)
-    async def start_web_server():
-        app_web = web.Application()
-        app_web.router.add_get('/health', health_check)
-        runner = web.AppRunner(app_web)
-        await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', PORT)
-        await site.start()
-        print(f"Health check server started on port {PORT}")
-    
-    # Start both the Telegram bot and the health check server
+    # Set up signal handlers for graceful shutdown
+    import signal
     loop = asyncio.get_event_loop()
-    loop.create_task(start_web_server())
     
-    # Run the Pyrogram client
-    app.run()
-    print("Bot has stopped.")
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, lambda: asyncio.create_task(app.stop()))
+    
+    # Run the bot with error handling
+    try:
+        loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Bot crashed with error: {e}")
+    finally:
+        loop.close()
