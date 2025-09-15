@@ -291,70 +291,41 @@ async def download_file_handler(client, message: Message):
             progress_reporter(status_message, status, total_size, f"Downloading `{escape_markdown(file_name)}` (Turbo)", time.time())
         )
 
-        if use_memory_stream(total_size):
-            # stream into memory and send directly
-            file_obj = io.BytesIO()
-            await asyncio.to_thread(
-                s3_client.download_fileobj,
-                Bucket=WASABI_BUCKET,
-                Key=file_name,
-                Fileobj=file_obj,
-                Callback=boto_callback,
-                Config=transfer_config
-            )
-            status['running'] = False
-            try:
-                reporter_task.cancel()
-                await reporter_task
-            except asyncio.CancelledError:
-                pass
+        # Always use a temporary file for downloads to avoid BytesIO issues with Pyrogram
+        tmp_fd, tmp_path = tempfile.mkstemp(prefix="s3_dl_")
+        os.close(tmp_fd)
 
-            file_obj.seek(0)
-            await safe_edit(status_message, "Uploading to Telegram...")
-            # Pyrogram accepts file-like objects for send_document
-            await client.send_document(
-                chat_id=message.chat.id,
-                document=file_obj,
-                file_name=file_name,
-                progress=pyrogram_progress_callback,
-                progress_args=(status_message, time.time(), "Uploading")
-            )
-            await status_message.delete()
+        await asyncio.to_thread(
+            s3_client.download_file,
+            WASABI_BUCKET,
+            file_name,
+            tmp_path,
+            Callback=boto_callback,
+            Config=transfer_config
+        )
 
-        else:
-            # large file: stream to temp file then send
-            tmp_fd, tmp_path = tempfile.mkstemp(prefix="s3_dl_")
-            os.close(tmp_fd)
+        status['running'] = False
+        try:
+            reporter_task.cancel()
+            await reporter_task
+        except asyncio.CancelledError:
+            pass
 
-            await asyncio.to_thread(
-                s3_client.download_file,
-                WASABI_BUCKET,
-                file_name,
-                tmp_path,
-                Callback=boto_callback,
-                Config=transfer_config
-            )
+        await safe_edit(status_message, "Uploading to Telegram...")
+        
+        # Send the file from the temporary path
+        await client.send_document(
+            chat_id=message.chat.id,
+            document=tmp_path,
+            file_name=file_name,
+            progress=pyrogram_progress_callback,
+            progress_args=(status_message, time.time(), "Uploading")
+        )
+        await status_message.delete()
 
-            status['running'] = False
-            try:
-                reporter_task.cancel()
-                await reporter_task
-            except asyncio.CancelledError:
-                pass
-
-            await safe_edit(status_message, "Uploading to Telegram...")
-            await client.send_document(
-                chat_id=message.chat.id,
-                document=tmp_path,
-                file_name=file_name,
-                progress=pyrogram_progress_callback,
-                progress_args=(status_message, time.time(), "Uploading")
-            )
-            await status_message.delete()
-
-            # cleanup
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+        # Cleanup
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
     except ClientError as e:
         code = e.response.get('Error', {}).get('Code', '')
@@ -367,8 +338,12 @@ async def download_file_handler(client, message: Message):
         err = "".join(traceback.format_exception_only(type(e), e)).strip()
         await safe_edit(status_message, f"❌ **An unexpected error occurred:** `{escape_markdown(err)}`")
     finally:
-        # ensure downloads dir is cleaned if necessary (we used temp files)
-        pass
+        # Ensure cleanup even if errors occur
+        if 'tmp_path' in locals() and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except:
+                pass
 
 # --- Main Execution ---
 if __name__ == "__main__":
