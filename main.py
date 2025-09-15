@@ -26,7 +26,7 @@ WASABI_ACCESS_KEY = os.getenv("WASABI_ACCESS_KEY")
 WASABI_SECRET_KEY = os.getenv("WASABI_SECRET_KEY")
 WASABI_BUCKET = os.getenv("WASABI_BUCKET")
 WASABI_REGION = os.getenv("WASABI_REGION")
-PORT = int(os.environ.get("PORT", 8080))
+PORT = int(os.environ.get("PORT")
 
 # --- Constants ---
 FILES_PER_PAGE = 10
@@ -111,6 +111,7 @@ def pyrogram_progress_callback(current, total, message, start_time, task):
         if not hasattr(pyrogram_progress_callback, 'last_edit_time') or now - pyrogram_progress_callback.last_edit_time > 3:
             percentage = min((current * 100 / total), 100) if total > 0 else 0
             text = f"**{task}...** {percentage:.2f}%"
+            # Use asyncio.create_task to avoid blocking the callback
             asyncio.create_task(message.edit_text(text))
             pyrogram_progress_callback.last_edit_time = now
     except Exception as e:
@@ -124,42 +125,48 @@ async def send_file_list_page(message_or_query, files: list, page: int = 0, quer
 
     if not paginated_files and page == 0:
         text = "✅ Your Wasabi bucket is empty." if not query_str else f"❌ No files found matching `{query_str}`."
-        await (message_or_query.edit_text if isinstance(message_or_query, Message) else message_or_query.message.edit_text)(text)
+        # Determine how to edit the message based on the input type
+        editor = message_or_query.edit_text if isinstance(message_or_query, Message) else message_or_query.message.edit_text
+        await editor(text)
         return
 
     buttons = []
     for file in paginated_files:
         file_name = file['Key']
         file_size = humanbytes(file['Size'])
+        # Simplified callback for direct download
         buttons.append([
-            InlineKeyboardButton(f"📄 {file_name} ({file_size})", callback_data=f"info:{start_offset + paginated_files.index(file)}:{query_str}")
+            InlineKeyboardButton(f"📄 {file_name} ({file_size})", callback_data=f"download:{file_name}")
         ])
 
     total_pages = math.ceil(len(files) / FILES_PER_PAGE)
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"page:{page - 1}:{query_str}"))
-    nav_buttons.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="noop"))
+    if total_pages > 1:
+        nav_buttons.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="noop"))
     if end_offset < len(files):
         nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"page:{page + 1}:{query_str}"))
 
-    buttons.append(nav_buttons)
+    if nav_buttons:
+        buttons.append(nav_buttons)
     buttons.append([InlineKeyboardButton("🔄 Refresh", callback_data=f"page:{page}:{query_str}")])
 
     keyboard = InlineKeyboardMarkup(buttons)
     text = "**Files in your Wasabi Bucket:**" if not query_str else f"**Search results for `{query_str}`:**"
     
-    if isinstance(message_or_query, Message):
-        await message_or_query.edit_text(text, reply_markup=keyboard)
-    elif isinstance(message_or_query, CallbackQuery):
-        await message_or_query.message.edit_text(text, reply_markup=keyboard)
+    editor = message_or_query.edit_text if isinstance(message_or_query, Message) else message_or_query.message.edit_text
+    await editor(text, reply_markup=keyboard)
 
 
 # --- Bot Handlers ---
 @app.on_message(filters.command("start"))
 async def start_command(_, message: Message):
-    """Handles the /start command."""
-    await message.reply_text(
+    """Handles the /start command with a welcome image."""
+    # A cool, tech-themed image URL for the welcome message
+    welcome_image_url = "https://raw.githubusercontent.com/Mraprguild8133/Telegramstorage-/refs/heads/main/welcome.jpg" 
+    
+    welcome_caption = (
         "Hello! I am an **Extreme-Speed** Wasabi storage bot.\n\n"
         "I use aggressive parallel processing to make transfers incredibly fast.\n\n"
         "➡️ **To upload:** Just send me any file.\n"
@@ -168,6 +175,16 @@ async def start_command(_, message: Message):
         "🔎 **To search files:** Use `/search <query>`.\n\n"
         "Generated links are direct streamable links valid for 24 hours."
     )
+    
+    try:
+        await message.reply_photo(
+            photo=welcome_image_url,
+            caption=welcome_caption
+        )
+    except Exception as e:
+        logger.error(f"Failed to send welcome photo, falling back to text: {e}")
+        await message.reply_text(welcome_caption)
+
 
 @app.on_message(filters.command(["list", "search"]))
 async def list_or_search_files_handler(_, message: Message):
@@ -181,10 +198,7 @@ async def list_or_search_files_handler(_, message: Message):
         if 'Contents' in response:
             all_files = sorted(response['Contents'], key=lambda x: x['LastModified'], reverse=True)
             
-            if query_str:
-                filtered_files = [f for f in all_files if query_str.lower() in f['Key'].lower()]
-            else:
-                filtered_files = all_files
+            filtered_files = [f for f in all_files if query_str.lower() in f['Key'].lower()] if query_str else all_files
             
             await send_file_list_page(status_message, filtered_files, page=0, query_str=query_str)
         else:
@@ -204,17 +218,20 @@ async def upload_file_handler(_, message: Message):
         await message.reply_text("Unsupported file type.")
         return
 
-    file_path = None
     status_message = await message.reply_text("Processing your request...", quote=True)
 
     try:
-        file_name = media.file_name or "file_from_telegram"
+        file_name = media.file_name or "file_from_telegram.unknown"
         
         # Check if file exists
         try:
             await asyncio.to_thread(s3_client.head_object, Bucket=WASABI_BUCKET, Key=file_name)
+            # Store message details for the callback to retrieve
+            # This is a simplified way; a more robust solution would use a dictionary or cache
+            app.overwrite_map = {status_message.id: message}
+            
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Overwrite", callback_data=f"overwrite:{file_name}")],
+                [InlineKeyboardButton("✅ Overwrite", callback_data=f"overwrite:{status_message.id}")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="cancel_upload")]
             ])
             await status_message.edit_text(f"⚠️ File `{file_name}` already exists. Do you want to overwrite it?", reply_markup=keyboard)
@@ -231,22 +248,17 @@ async def upload_file_handler(_, message: Message):
         logger.error(f"Upload error: {e}", exc_info=True)
 
 
-async def perform_upload(status_message: Message, original_message: Message, file_name: str, is_overwrite: bool = False):
+async def perform_upload(status_message: Message, original_message: Message, file_name: str):
     """Core logic to download from Telegram and upload to Wasabi."""
     file_path = None
     media = original_message.document or original_message.video or original_message.audio or original_message.photo
     
     try:
-        if not is_overwrite: # Don't re-download if we already did for overwrite check
-             await status_message.edit_text("Downloading from Telegram...")
-             file_path = await original_message.download(progress=pyrogram_progress_callback, progress_args=(status_message, time.time(), "Downloading"))
-        else: # If overwriting, the file should already be downloaded.
-            file_path = os.path.join(DOWNLOAD_DIR, file_name)
-            if not os.path.exists(file_path):
-                 await status_message.edit_text("Downloading from Telegram...")
-                 file_path = await original_message.download(file_name=file_path, progress=pyrogram_progress_callback, progress_args=(status_message, time.time(), "Downloading"))
-
-
+        await status_message.edit_text("Downloading from Telegram...")
+        # Ensure download path is unique to avoid conflicts
+        download_path = os.path.join(DOWNLOAD_DIR, f"{time.time()}_{file_name}")
+        file_path = await original_message.download(file_name=download_path)
+        
         status = {'running': True, 'seen': 0}
         
         def boto_callback(bytes_amount):
@@ -312,7 +324,7 @@ async def perform_download(status_message: Message, file_name: str, chat_id: int
         
         status['running'] = False
         reporter_task.cancel()
-        await asyncio.sleep(1) # Allow final progress update
+        await asyncio.sleep(1)
         
         await status_message.edit_text("Uploading to Telegram...")
         await app.send_document(
@@ -339,52 +351,49 @@ async def perform_download(status_message: Message, file_name: str, chat_id: int
 @app.on_callback_query()
 async def callback_query_handler(_, query: CallbackQuery):
     """Handles all button presses from inline keyboards."""
+    try:
+        await query.answer() # Acknowledge the button press immediately
+    except Exception:
+        pass # Ignore if message is too old
+        
     data = query.data
     parts = data.split(":", 2)
     action = parts[0]
     
-    await query.answer()
-
     if action == "noop":
         return
 
-    # Handle file list pagination
     if action == "page":
         page = int(parts[1])
         query_str = parts[2] if len(parts) > 2 else ""
         
-        status_message = await query.message.edit_text("🔎 Fetching file list...")
         try:
             response = await asyncio.to_thread(s3_client.list_objects_v2, Bucket=WASABI_BUCKET)
             all_files = sorted(response.get('Contents', []), key=lambda x: x['LastModified'], reverse=True)
-            
             filtered_files = [f for f in all_files if query_str.lower() in f['Key'].lower()] if query_str else all_files
-            
             await send_file_list_page(query, filtered_files, page, query_str)
         except Exception as e:
-            await status_message.edit_text(f"❌ Error refreshing list: {e}")
+            await query.message.edit_text(f"❌ Error refreshing list: {e}")
 
-    # Handle file info/action menu
-    elif action == "info":
-        # ... (Get file info and show action buttons)
-        pass # Placeholder for future expanded info
-
-    # Handle direct download from button
-    elif action.startswith("download"):
+    elif action == "download":
         file_name = parts[1]
         status_message = await query.message.edit_text(f"Preparing to download `{file_name}`...")
         await perform_download(status_message, file_name, query.message.chat.id)
     
-    # Handle file deletion confirmation
-    elif action.startswith("delete"):
-        # ... (Show confirmation dialog)
-        pass # Placeholder for deletion logic
-
-    # Handle overwrite confirmation
     elif action == "overwrite":
-        file_name = parts[1]
+        original_message_id = int(parts[1])
+        # Retrieve the original message using our map
+        original_message = getattr(app, 'overwrite_map', {}).get(original_message_id)
+        
+        if not original_message:
+            await query.message.edit_text("❌ Error: Could not find the original file message. Please try sending the file again.")
+            return
+
+        file_name = (original_message.document or original_message.video or original_message.audio or original_message.photo).file_name
         await query.message.edit_text(f"Acknowledged. Overwriting `{file_name}`...")
-        await perform_upload(query.message, query.message.reply_to_message, file_name, is_overwrite=True)
+        await perform_upload(query.message, original_message, file_name)
+        # Clean up the map
+        del app.overwrite_map[original_message_id]
 
     elif action == "cancel_upload":
         await query.message.edit_text("✅ Upload cancelled.")
@@ -400,7 +409,6 @@ if __name__ == "__main__":
     logger.info("Bot is starting with EXTREME-SPEED settings...")
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     
-    # Start a simple web server for health checks
     async def start_web_server():
         app_web = web.Application()
         app_web.router.add_get('/health', health_check)
