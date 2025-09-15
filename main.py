@@ -133,7 +133,7 @@ def humanbytes(size):
     while size >= power and t_n < len(power_dict) -1:
         size /= power
         t_n += 1
-    return "{:.2f}".format(size) + power_dict[t_n]
+    return "{:.2f} {}".format(size, power_dict[t_n])
 
 def sanitize_filename(filename):
     """Remove potentially dangerous characters from filenames"""
@@ -184,27 +184,29 @@ def get_user_folder(user_id):
     """Get user-specific folder path"""
     return f"user_{user_id}"
 
-def create_progress_bar(percentage, length=12):
-    """Create a visual progress bar with emoji indicators"""
+def create_modern_progress_bar(percentage, length=10):
+    """Create a modern visual progress bar"""
     filled_length = int(length * percentage / 100)
-    bar = "█" * filled_length + "░" * (length - filled_length)
     
-    # Add indicator based on progress
-    if percentage < 25:
-        indicator = "🟦"
-    elif percentage < 50:
-        indicator = "🟩"
-    elif percentage < 75:
-        indicator = "🟨"
+    # Create a gradient effect based on progress
+    if percentage < 30:
+        filled_char = "▰"
+        empty_char = "▱"
+    elif percentage < 70:
+        filled_char = "🟦"
+        empty_char = "⬜"
     else:
-        indicator = "🟥" if percentage < 100 else "✅"
+        filled_char = "🟩"
+        empty_char = "⬜"
     
-    return f"{indicator} {bar}"
+    bar = filled_char * filled_length + empty_char * (length - filled_length)
+    
+    # Add percentage indicator at the end
+    return f"{bar}"
 
 async def progress_reporter(message: Message, status: dict, total_size: int, task: str, start_time: float):
-    """Enhanced progress reporter with beautiful visual design"""
+    """Modern progress reporter with sleek visual design"""
     last_update = 0
-    max_updates = 100  # Limit updates to prevent flooding
     
     while status['running']:
         current_time = time.time()
@@ -223,29 +225,35 @@ async def progress_reporter(message: Message, status: dict, total_size: int, tas
         
         # Format ETA
         if eta_seconds > 3600:
-            eta = f"{eta_seconds/3600:.1f}h"
+            eta = f"{int(eta_seconds/3600)}h {int((eta_seconds%3600)/60)}m"
         elif eta_seconds > 60:
-            eta = f"{eta_seconds/60:.1f}m"
+            eta = f"{int(eta_seconds/60)}m {int(eta_seconds%60)}s"
         else:
-            eta = f"{eta_seconds:.0f}s"
+            eta = f"{int(eta_seconds)}s" if eta_seconds > 0 else "Calculating..."
         
-        # Create the progress bar
-        progress_bar = create_progress_bar(percentage)
+        # Create the progress bar with a modern design
+        progress_bar = create_modern_progress_bar(percentage)
         
-        # Only update if significant change or every 3 seconds
-        if current_time - last_update > 3 or abs(percentage - status.get('last_percentage', 0)) > 5:
+        # Only update if significant change or every 2 seconds
+        if current_time - last_update > 2 or abs(percentage - status.get('last_percentage', 0)) > 3:
             status['last_percentage'] = percentage
             
             # Use HTML formatting
             escaped_task = escape_html(task)
             
+            # File name with ellipsis if too long
+            display_task = escaped_task
+            if len(display_task) > 35:
+                display_task = display_task[:32] + "..."
+            
             text = (
-                f"<b>📤 {escaped_task}</b>\n\n"
-                f"{progress_bar} <b>{percentage:.2f}%</b>\n\n"
-                f"<b>📊 Progress:</b> {humanbytes(status['seen'])} / {humanbytes(total_size)}\n"
-                f"<b>🚀 Speed:</b> {humanbytes(speed)}/s\n"
+                f"<b>🚀 TURBO UPLOAD</b>\n\n"
+                f"<b>📁 {display_task}</b>\n\n"
+                f"{progress_bar}\n"
+                f"<b>{percentage:.1f}%</b> • {humanbytes(status['seen'])} / {humanbytes(total_size)}\n\n"
+                f"<b>⚡ Speed:</b> {humanbytes(speed)}/s\n"
                 f"<b>⏱️ ETA:</b> {eta}\n"
-                f"<b>🕒 Elapsed:</b> {time.strftime('%H:%M:%S', time.gmtime(elapsed_time))}"
+                f"<b>🕒 Elapsed:</b> {time.strftime('%M:%S', time.gmtime(elapsed_time))}"
             )
             
             try:
@@ -257,12 +265,13 @@ async def progress_reporter(message: Message, status: dict, total_size: int, tas
                 # If HTML fails, try without formatting
                 try:
                     plain_text = (
-                        f"{task}\n\n"
-                        f"{progress_bar} {percentage:.2f}%\n\n"
-                        f"Progress: {humanbytes(status['seen'])} / {humanbytes(total_size)}\n"
+                        f"TURBO UPLOAD\n\n"
+                        f"{display_task}\n\n"
+                        f"{progress_bar}\n"
+                        f"{percentage:.1f}% • {humanbytes(status['seen'])} / {humanbytes(total_size)}\n\n"
                         f"Speed: {humanbytes(speed)}/s\n"
                         f"ETA: {eta}\n"
-                        f"Elapsed: {time.strftime('%H:%M:%S', time.gmtime(elapsed_time))}"
+                        f"Elapsed: {time.strftime('%M:%S', time.gmtime(elapsed_time))}"
                     )
                     await message.edit_text(plain_text)
                     last_update = current_time
@@ -272,25 +281,43 @@ async def progress_reporter(message: Message, status: dict, total_size: int, tas
         await asyncio.sleep(1)  # Update every second
 
 def pyrogram_progress_callback(current, total, message, start_time, task):
-    """Progress callback for Pyrogram's synchronous operations."""
+    """Progress callback for Pyrogram's synchronous operations with new design."""
     try:
-        if not hasattr(pyrogram_progress_callback, 'last_edit_time') or time.time() - pyrogram_progress_callback.last_edit_time > 3:
+        if not hasattr(pyrogram_progress_callback, 'last_edit_time') or time.time() - pyrogram_progress_callback.last_edit_time > 2:
             percentage = min((current * 100 / total), 100) if total > 0 else 0
             
-            # Create a simple progress bar
-            bar_length = 10
+            # Create a modern progress bar
+            bar_length = 8
             filled = int(bar_length * percentage / 100)
-            bar = "█" * filled + "░" * (bar_length - filled)
+            bar = "▰" * filled + "▱" * (bar_length - filled)
             
-            # Use HTML formatting instead of markdown
+            # Use HTML formatting
             escaped_task = escape_html(task)
             
-            text = f"<b>⬇️ {escaped_task}</b>\n{bar} {percentage:.2f}%"
+            # Truncate long file names
+            display_task = escaped_task
+            if len(display_task) > 30:
+                display_task = display_task[:27] + "..."
+            
+            elapsed_time = time.time() - start_time
+            
+            text = (
+                f"<b>⬇️ DOWNLOADING</b>\n"
+                f"<b>📁 {display_task}</b>\n"
+                f"{bar} <b>{percentage:.1f}%</b>\n"
+                f"<b>⏱️ Elapsed:</b> {time.strftime('%M:%S', time.gmtime(elapsed_time))}"
+            )
+            
             try:
                 message.edit_text(text, parse_mode=ParseMode.HTML)
             except:
                 # If HTML fails, try without formatting
-                message.edit_text(f"{task}\n{bar} {percentage:.2f}%")
+                message.edit_text(
+                    f"DOWNLOADING\n"
+                    f"{display_task}\n"
+                    f"{bar} {percentage:.1f}%\n"
+                    f"Elapsed: {time.strftime('%M:%S', time.gmtime(elapsed_time))}"
+                )
             pyrogram_progress_callback.last_edit_time = time.time()
     except Exception:
         pass
@@ -455,11 +482,11 @@ async def download_file_handler(client, message: Message):
         await asyncio.sleep(0.1)  # Give the reporter task a moment to finish
         reporter_task.cancel()
         
-        await status_message.edit_text("📤 Uploading to Telegram...")
+        await status_message.edit_text("ðŸ“¤ Uploading to Telegram...")
         await message.reply_document(
             document=local_file_path,
-            caption=f"✅ <b>Download Complete:</b> <code>{safe_file_name}</code>\n"
-                    f"📦 <b>Size:</b> {humanbytes(total_size)}",
+            caption=f"âœ… <b>Download Complete:</b> <code>{safe_file_name}</code>\n"
+                    f"ðŸ“¦ <b>Size:</b> {humanbytes(total_size)}",
             parse_mode=ParseMode.HTML,
             progress=pyrogram_progress_callback,
             progress_args=(status_message, time.time(), "Uploading to Telegram")
@@ -470,17 +497,17 @@ async def download_file_handler(client, message: Message):
     except ClientError as e:
         error_code = e.response['Error']['Code']
         if error_code == '404':
-            await status_message.edit_text(f"❌ <b>Error:</b> File not found in Wasabi: <code>{safe_file_name}</code>", parse_mode=ParseMode.HTML)
+            await status_message.edit_text(f"âŒ <b>Error:</b> File not found in Wasabi: <code>{safe_file_name}</code>", parse_mode=ParseMode.HTML)
         elif error_code == '403':
-            await status_message.edit_text("❌ <b>Error:</b> Access denied. Check your Wasabi credentials.", parse_mode=ParseMode.HTML)
+            await status_message.edit_text("âŒ <b>Error:</b> Access denied. Check your Wasabi credentials.", parse_mode=ParseMode.HTML)
         elif error_code == 'NoSuchBucket':
-            await status_message.edit_text("❌ <b>Error:</b> Bucket does not exist.", parse_mode=ParseMode.HTML)
+            await status_message.edit_text("âŒ <b>Error:</b> Bucket does not exist.", parse_mode=ParseMode.HTML)
         else:
             error_msg = escape_html(str(e))
-            await status_message.edit_text(f"❌ <b>S3 Error:</b> {error_code} - {error_msg}", parse_mode=ParseMode.HTML)
+            await status_message.edit_text(f"âŒ <b>S3 Error:</b> {error_code} - {error_msg}", parse_mode=ParseMode.HTML)
     except Exception as e:
         error_msg = escape_html(str(e))
-        await status_message.edit_text(f"❌ <b>An unexpected error occurred:</b> {error_msg}", parse_mode=ParseMode.HTML)
+        await status_message.edit_text(f"âŒ <b>An unexpected error occurred:</b> {error_msg}", parse_mode=ParseMode.HTML)
     finally:
         if os.path.exists(local_file_path):
             os.remove(local_file_path)
@@ -490,12 +517,12 @@ async def list_files(client, message: Message):
     """List files in the Wasabi bucket"""
     # Check authorization
     if not await is_authorized(message.from_user.id):
-        await message.reply_text("❌ Unauthorized access.")
+        await message.reply_text("âŒ Unauthorized access.")
         return
     
     # Check rate limiting
     if not await check_rate_limit(message.from_user.id):
-        await message.reply_text("❌ Rate limit exceeded. Please try again in a minute.")
+        await message.reply_text("âŒ Rate limit exceeded. Please try again in a minute.")
         return
         
     try:
@@ -503,7 +530,7 @@ async def list_files(client, message: Message):
         response = await asyncio.to_thread(s3_client.list_objects_v2, Bucket=WASABI_BUCKET, Prefix=user_prefix)
         
         if 'Contents' not in response:
-            await message.reply_text("📂 No files found in your storage.")
+            await message.reply_text("ðŸ“‚ No files found in your storage.")
             return
         
         # Remove the user prefix from displayed filenames
