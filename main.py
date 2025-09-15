@@ -9,6 +9,7 @@ import atexit
 import threading
 import socket
 import json
+import html
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 from pyrogram import Client, filters
@@ -136,12 +137,11 @@ def sanitize_filename(filename):
         filename = name[:200-len(ext)] + ext
     return filename
 
-def escape_markdown(text):
-    """Escape markdown special characters"""
+def escape_html(text):
+    """Escape HTML special characters"""
     if not text:
         return ""
-    escape_chars = r'\*_`\[\(\)~>#\+\-=|{}\.!'
-    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
+    return html.escape(str(text))
 
 def cleanup():
     """Clean up temporary files on exit"""
@@ -184,22 +184,22 @@ async def progress_reporter(message: Message, status: dict, total_size: int, tas
         
         progress_bar = "[{0}{1}]".format('█' * int(percentage / 10), ' ' * (10 - int(percentage / 10)))
         
-        # Escape markdown characters to prevent parsing errors
-        escaped_task = escape_markdown(task)
+        # Use HTML formatting instead of markdown
+        escaped_task = escape_html(task)
         
         text = (
-            f"**{escaped_task}**\n"
+            f"<b>{escaped_task}</b>\n"
             f"{progress_bar} {percentage:.2f}%\n"
-            f"**Done:** {humanbytes(status['seen'])} of {humanbytes(total_size)}\n"
-            f"**Speed:** {humanbytes(speed)}/s\n"
-            f"**ETA:** {eta}"
+            f"<b>Done:</b> {humanbytes(status['seen'])} of {humanbytes(total_size)}\n"
+            f"<b>Speed:</b> {humanbytes(speed)}/s\n"
+            f"<b>ETA:</b> {eta}"
         )
         try:
-            await message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
+            await message.edit_text(text, parse_mode=ParseMode.HTML)
         except FloodWait as e:
             await asyncio.sleep(e.x)
         except Exception:
-            # If markdown fails, try without formatting
+            # If HTML fails, try without formatting
             try:
                 plain_text = (
                     f"{task}\n"
@@ -219,14 +219,14 @@ def pyrogram_progress_callback(current, total, message, start_time, task):
         if not hasattr(pyrogram_progress_callback, 'last_edit_time') or time.time() - pyrogram_progress_callback.last_edit_time > 3:
             percentage = min((current * 100 / total), 100) if total > 0 else 0
             
-            # Escape markdown characters to prevent parsing errors
-            escaped_task = escape_markdown(task)
+            # Use HTML formatting instead of markdown
+            escaped_task = escape_html(task)
             
-            text = f"**{escaped_task}** {percentage:.2f}%"
+            text = f"<b>{escaped_task}</b> {percentage:.2f}%"
             try:
-                message.edit_text(text, parse_mode=ParseMode.Markdown)
+                message.edit_text(text, parse_mode=ParseMode.HTML)
             except:
-                # If markdown fails, try without formatting
+                # If HTML fails, try without formatting
                 message.edit_text(f"{task} {percentage:.2f}%")
             pyrogram_progress_callback.last_edit_time = time.time()
     except Exception:
@@ -238,13 +238,13 @@ def pyrogram_progress_callback(current, total, message, start_time, task):
 async def start_command(client, message: Message):
     """Handles the /start command."""
     await message.reply_text(
-        "Hello! I am a **Turbo-Speed** Wasabi storage bot.\n\n"
+        "Hello! I am a <b>Turbo-Speed</b> Wasabi storage bot.\n\n"
         "I use parallel processing to make transfers incredibly fast.\n\n"
-        "➡️ **To upload:** Just send me any file.\n"
-        "⬅️ **To download:** Use `/download <file_name>`.\n"
-        "📋 **To list files:** Use `/list`.\n\n"
+        "➡️ <b>To upload:</b> Just send me any file.\n"
+        "⬅️ <b>To download:</b> Use <code>/download &lt;file_name&gt;</code>\n"
+        "📋 <b>To list files:</b> Use <code>/list</code>\n\n"
         "Generated links are direct streamable links compatible with players like VLC & MX Player.",
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode=ParseMode.HTML
     )
 
 @app.on_message(filters.document | filters.video | filters.audio | filters.photo)
@@ -297,19 +297,19 @@ async def upload_file_handler(client, message: Message):
 
         presigned_url = s3_client.generate_presigned_url('get_object', Params={'Bucket': WASABI_BUCKET, 'Key': file_name}, ExpiresIn=86400) # 24 hours
         
-        # Escape markdown in the filename and URL display
-        safe_file_name = escape_markdown(file_name)
-        safe_url = escape_markdown(presigned_url)
+        # Use HTML formatting instead of markdown
+        safe_file_name = escape_html(file_name)
+        safe_url = escape_html(presigned_url)
         
         await status_message.edit_text(
-            f"✅ **Upload Successful!**\n\n"
-            f"**File:** `{safe_file_name}`\n"
-            f"**Streamable Link (24h expiry):**\n`{safe_url}`",
-            parse_mode=ParseMode.MARKDOWN
+            f"✅ <b>Upload Successful!</b>\n\n"
+            f"<b>File:</b> <code>{safe_file_name}</code>\n"
+            f"<b>Streamable Link (24h expiry):</b>\n<code>{safe_url}</code>",
+            parse_mode=ParseMode.HTML
         )
 
     except Exception as e:
-        await status_message.edit_text(f"❌ An error occurred: {escape_markdown(str(e))}")
+        await status_message.edit_text(f"❌ An error occurred: {escape_html(str(e))}")
 
     finally:
         if file_path and os.path.exists(file_path):
@@ -324,15 +324,15 @@ async def download_file_handler(client, message: Message):
         return
 
     if len(message.command) < 2:
-        await message.reply_text("Usage: `/download <file_name_in_wasabi>`")
+        await message.reply_text("Usage: <code>/download &lt;file_name_in_wasabi&gt;</code>", parse_mode=ParseMode.HTML)
         return
 
     file_name = " ".join(message.command[1:])
-    safe_file_name = escape_markdown(file_name)
+    safe_file_name = escape_html(file_name)
     local_file_path = f"./downloads/{file_name}"
     os.makedirs("./downloads", exist_ok=True)
     
-    status_message = await message.reply_text(f"Searching for `{safe_file_name}`...", quote=True, parse_mode=ParseMode.MARKDOWN)
+    status_message = await message.reply_text(f"Searching for <code>{safe_file_name}</code>...", quote=True, parse_mode=ParseMode.HTML)
 
     try:
         meta = await asyncio.to_thread(s3_client.head_object, Bucket=WASABI_BUCKET, Key=file_name)
@@ -367,7 +367,8 @@ async def download_file_handler(client, message: Message):
         await status_message.edit_text("Uploading to Telegram...")
         await message.reply_document(
             document=local_file_path,
-            caption=f"✅ **Download Complete:** `{safe_file_name}`",
+            caption=f"✅ <b>Download Complete:</b> <code>{safe_file_name}</code>",
+            parse_mode=ParseMode.HTML,
             progress=pyrogram_progress_callback,
             progress_args=(status_message, time.time(), "Uploading to Telegram")
         )
@@ -377,17 +378,17 @@ async def download_file_handler(client, message: Message):
     except ClientError as e:
         error_code = e.response['Error']['Code']
         if error_code == '404':
-            await status_message.edit_text(f"❌ **Error:** File not found in Wasabi: `{safe_file_name}`", parse_mode=ParseMode.MARKDOWN)
+            await status_message.edit_text(f"❌ <b>Error:</b> File not found in Wasabi: <code>{safe_file_name}</code>", parse_mode=ParseMode.HTML)
         elif error_code == '403':
-            await status_message.edit_text("❌ **Error:** Access denied. Check your Wasabi credentials.")
+            await status_message.edit_text("❌ <b>Error:</b> Access denied. Check your Wasabi credentials.", parse_mode=ParseMode.HTML)
         elif error_code == 'NoSuchBucket':
-            await status_message.edit_text("❌ **Error:** Bucket does not exist.")
+            await status_message.edit_text("❌ <b>Error:</b> Bucket does not exist.", parse_mode=ParseMode.HTML)
         else:
-            error_msg = escape_markdown(str(e))
-            await status_message.edit_text(f"❌ **S3 Error:** {error_code} - {error_msg}")
+            error_msg = escape_html(str(e))
+            await status_message.edit_text(f"❌ <b>S3 Error:</b> {error_code} - {error_msg}", parse_mode=ParseMode.HTML)
     except Exception as e:
-        error_msg = escape_markdown(str(e))
-        await status_message.edit_text(f"❌ **An unexpected error occurred:** {error_msg}")
+        error_msg = escape_html(str(e))
+        await status_message.edit_text(f"❌ <b>An unexpected error occurred:</b> {error_msg}", parse_mode=ParseMode.HTML)
     finally:
         if os.path.exists(local_file_path):
             os.remove(local_file_path)
@@ -407,16 +408,16 @@ async def list_files(client, message: Message):
             return
         
         files = [obj['Key'] for obj in response['Contents']]
-        safe_files = [escape_markdown(file) for file in files[:20]]  # Show first 20 files
-        files_list = "\n".join([f"• `{file}`" for file in safe_files])
+        safe_files = [escape_html(file) for file in files[:20]]  # Show first 20 files
+        files_list = "\n".join([f"• <code>{file}</code>" for file in safe_files])
         
         if len(files) > 20:
             files_list += f"\n\n...and {len(files) - 20} more files"
         
-        await message.reply_text(f"**Files in bucket:**\n\n{files_list}", parse_mode=ParseMode.MARKDOWN)
+        await message.reply_text(f"<b>Files in bucket:</b>\n\n{files_list}", parse_mode=ParseMode.HTML)
     
     except Exception as e:
-        error_msg = escape_markdown(str(e))
+        error_msg = escape_html(str(e))
         await message.reply_text(f"❌ Error listing files: {error_msg}")
 
 # --- Main Execution ---
