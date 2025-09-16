@@ -352,7 +352,7 @@ def generate_player_links(file_name, presigned_url):
     encoded_url = quote(presigned_url, safe='')
     
     # MX Player intent URL (simplified to avoid Telegram URL length limits)
-    mx_player_url = f"intent:{encoded_url}#Intent;package=com.mxtech.videoplayer.ad;scheme=http;type=video;end"
+    mx_player_url = f"https://mxplay.com/play?url={encoded_url}"
     
     # VLC Player URL (simplified to avoid Telegram URL length limits)
     vlc_player_url = f"https://www.videolan.org/vlc.html?url={encoded_url}"
