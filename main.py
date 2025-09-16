@@ -510,7 +510,7 @@ async def upload_file_handler(client, message: Message):
             f"<b>📦 Size:</b> {humanbytes(media.file_size)}\n"
             f"<b>🔗 Link expires in:</b> 24 hours\n\n"
             f"<b>🎬 Choose a player:</b>",
-            parse_mode=ParseMode.MAEKDOWN,
+            parse_mode=ParseMode.MARKDOWN,
             reply_markup=keyboard
         )
 
