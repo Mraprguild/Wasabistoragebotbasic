@@ -650,7 +650,7 @@ async def play_file_handler(client, message: Message):
             f"<b>📁 File:</b> <code>{safe_file_name}</code>\n"
             f"<b>🔗 Link expires in:</b> 24 hours\n\n"
             f"<b>Choose your preferred player:</b>",
-            parse_mode=ParseMode.HTML,
+            parse_mode=ParseMode.MARKDOWN,
             reply_markup=keyboard
         )
 
