@@ -237,7 +237,7 @@ async def ultra_progress_reporter(message: Message, status: dict, total_size: in
         # Calculate speed with smoothing
         speed = status['seen'] / elapsed_time if elapsed_time > 0 else 0
         speed_samples.append(speed)
-        if len(speed_samples) > 5:
+        if len(speed_samples) > 10:
             speed_samples.pop(0)
         avg_speed = sum(speed_samples) / len(speed_samples) if speed_samples else 0
         
