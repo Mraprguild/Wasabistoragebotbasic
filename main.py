@@ -347,15 +347,18 @@ def ultra_pyrogram_progress_callback(current, total, message, start_time, task):
         pass
 
 def generate_player_links(file_name, presigned_url):
-    """Generate player links for various media players"""
+    """Generate player links for various media players with better Android support"""
     # URL encode the presigned URL
     encoded_url = quote(presigned_url, safe='')
     
-    # MX Player intent URL (simplified to avoid Telegram URL length limits)
-    mx_player_url = f"https://mxplay.com/play?url={encoded_url}"
+    # MX Player intent URL (Android deep link format)
+    mx_player_url = f"intent://{encoded_url}#Intent;package=com.mxtech.videoplayer.ad;scheme=http;type=video/*;end"
     
-    # VLC Player URL (simplified to avoid Telegram URL length limits)
-    vlc_player_url = f"https://www.videolan.org/vlc.html?url={encoded_url}"
+    # VLC Player URL (Android deep link format)
+    vlc_player_url = f"vlc://{encoded_url}"
+    
+    # Alternative VLC URL (for different VLC versions)
+    vlc_alt_url = f"intent://{encoded_url}#Intent;package=org.videolan.vlc;scheme=http;type=video/*;end"
     
     # Generic streaming URL (for browsers)
     streaming_url = presigned_url
@@ -366,12 +369,13 @@ def generate_player_links(file_name, presigned_url):
     return {
         "mx_player": mx_player_url,
         "vlc_player": vlc_player_url,
+        "vlc_alt": vlc_alt_url,
         "streaming": streaming_url,
         "direct_download": direct_download_url
     }
 
 def create_player_keyboard(file_name, presigned_url):
-    """Create inline keyboard with player options"""
+    """Create inline keyboard with player options optimized for Android"""
     player_links = generate_player_links(file_name, presigned_url)
     
     keyboard = [
@@ -382,6 +386,9 @@ def create_player_keyboard(file_name, presigned_url):
         [
             InlineKeyboardButton("🌐 Online Player", url=player_links["streaming"]),
             InlineKeyboardButton("📥 Direct Download", url=player_links["direct_download"])
+        ],
+        [
+            InlineKeyboardButton("🔄 Alternative VLC", url=player_links["vlc_alt"])
         ]
     ]
     
