@@ -57,9 +57,9 @@ boto_config = BotoConfig(
 )
 
 transfer_config = TransferConfig(
-    multipart_threshold=5 * 1024 * 1024,   # Start multipart for files > 5MB
+    multipart_threshold=18 * 1024 * 1024,   # Start multipart for files > 5MB
     max_concurrency=50,                    # Extreme parallel threads
-    multipart_chunksize=50 * 1024 * 1024,  # Larger chunks for fewer requests
+    multipart_chunksize=32 * 1024 * 1024,  # Larger chunks for fewer requests
     num_download_attempts=10,              # More retries for stability
     use_threads=True
 )
@@ -77,7 +77,7 @@ s3_client = boto3.client(
 # --- Rate limiting ---
 user_limits = {}
 MAX_REQUESTS_PER_MINUTE = 30  # Increased limit for power users
-MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10GB Ultra size limit
+MAX_FILE_SIZE = 4 * 1024 * 1024 * 1024  # 10GB Ultra size limit
 
 # --- Authorization Check ---
 async def is_authorized(user_id):
