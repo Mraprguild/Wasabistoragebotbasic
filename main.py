@@ -10,6 +10,7 @@ import threading
 import socket
 import json
 import html
+from flask import Flask, render_template
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 from pyrogram import Client, filters
@@ -120,6 +121,14 @@ class HealthHandler(BaseHTTPRequestHandler):
         return
 
 def run_http_server():
+    # -----------------------------
+# Flask app for player.html
+# -----------------------------
+flask_app = Flask(__name__, template_folder="templates")
+
+@flask_app.route("/")
+def index():
+    return render_template("index.html")
     # Use the PORT environment variable if available (common in cloud platforms)
     port = int(os.environ.get('PORT', 8080))
     
