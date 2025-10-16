@@ -62,3 +62,42 @@ Upload, stream, and share files up to **4GB**, with **MX Player** and **VLC** su
 
 ## 📁 Project Structure
 
+├── main.py # Core bot logic
+├── wasabi_storage.py # Wasabi cloud storage handler
+├── telegram_storage.py # Telegram backup storage handler
+├── web_interface.py # Streaming and web player
+├── config.py # Environment and settings
+├── utils.py # Helper functions
+└── requirements.txt # Project dependencies
+
+---
+
+## 📊 Current Status
+✅ Core functionality implemented  
+✅ Wasabi cloud integrated  
+✅ 4GB file support active  
+✅ Telegram Channel storage working  
+✅ Streaming and MX Player integration ready  
+✅ Real-time progress tracking enabled  
+
+---
+
+## 🛠️ Recent Updates
+- Added Wasabi cloud integration  
+- Implemented streaming and player features  
+- Added inline keyboard navigation  
+- Improved progress tracking and error handling  
+- Enhanced mobile interface design  
+
+---
+
+## 📱 User Preferences
+- Focus on reliability and performance  
+- Real-time progress feedback  
+- Comprehensive error handling  
+- Mobile-first UI  
+
+---
+
+### 🧑‍💻 Author
+Developed by **MRAPRGUILD**
